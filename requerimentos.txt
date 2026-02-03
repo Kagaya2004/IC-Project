@@ -1,0 +1,27 @@
+# 1. Índices para suporte a GPU (CUDA 12.1)
+--extra-index-url https://download.pytorch.org/whl/cu121
+--find-links https://data.pyg.org/whl/torch-2.5.1+cu121.html
+
+# 2. Deep Learning (RTX 3050 6GB)
+torch==2.5.1+cu121
+torchvision==0.20.1+cu121
+torchaudio==2.5.1+cu121
+
+# 3. Grafos (PyG)
+torch-scatter
+torch-sparse
+torch-cluster
+torch-spline-conv
+torch-geometric
+
+# 4. Dados (Versões Estabilizadas)
+numpy==1.26.4
+pandas==2.1.4
+scikit-learn
+
+# 5. Utilidades
+geopy
+pyyaml
+tqdm
+matplotlib
+seaborn
