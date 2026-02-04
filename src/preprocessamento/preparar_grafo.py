@@ -12,7 +12,7 @@ def haversine_np(lon1, lat1, lon2, lat2):
     c = 2 * np.arcsin(np.sqrt(a))
     return 6371 * c 
 
-def gerar_grafo_stgcn(threshold_km=1.5):
+def gerar_grafo_stgcn(threshold_km=1.0):
     base_dir = r'C:\IC\Projeto_V2'
     input_path = os.path.join(base_dir, 'data', 'tratados', 'dataset_PosFeaturesEngineered.csv')
     output_dir = os.path.join(base_dir, 'data', 'tratados')
@@ -67,6 +67,8 @@ def gerar_grafo_stgcn(threshold_km=1.5):
     print(f"Shape do Tensor X: {x_tensor.shape} (Nós, Features)")
     print(f"Arestas no Grafo: {edge_index.shape[1]}")
     print("-" * 40)
+
+    return int(edge_index.shape[1])
 
 if __name__ == "__main__":
     gerar_grafo_stgcn()

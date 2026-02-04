@@ -61,5 +61,7 @@ def avaliar():
     mae_kmh = mae * (v_max - v_min)
     print(f"🚗 Erro Médio Real: {mae_kmh:.2f} km/h")
 
+    return float(mae)
+
 if __name__ == "__main__":
     avaliar()
