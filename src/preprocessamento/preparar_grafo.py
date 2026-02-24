@@ -1,74 +1,58 @@
 import pandas as pd
-import numpy as np
+import pickle
 import torch
+import numpy as np
 import os
-from scipy.spatial.distance import cdist
+import h5py
 
-def haversine_np(lon1, lat1, lon2, lat2):
-    lon1, lat1, lon2, lat2 = map(np.radians, [lon1, lat1, lon2, lat2])
-    dlon = lon2 - lon1
-    dlat = lat2 - lat1
-    a = np.sin(dlat/2.0)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon/2.0)**2
-    c = 2 * np.arcsin(np.sqrt(a))
-    return 6371 * c 
-
-def gerar_grafo_stgcn(threshold_km=1.0):
+def preparar_tudo():
     base_dir = r'C:\IC\Projeto_V2'
-    input_path = os.path.join(base_dir, 'data', 'tratados', 'dataset_PosFeaturesEngineered.csv')
-    output_dir = os.path.join(base_dir, 'data', 'tratados')
+    raw_dir = os.path.join(base_dir, 'data', 'brutos')
+    processed_dir = os.path.join(base_dir, 'data', 'tratados')
+    os.makedirs(processed_dir, exist_ok=True)
 
-    print(f"Carregando dados preparados de: {input_path}")
-    df = pd.read_csv(input_path)
+    # 1. Converter METR-LA.h5 para CSV com verificação de shape
+    print("⏳ Convertendo METR-LA.h5...")
+    h5_path = os.path.join(raw_dir, 'METR-LA.h5')
     
-    # --- PASSO DE DIAGNÓSTICO ---
-    print("\nVerificando e convertendo colunas:")
+    with h5py.File(h5_path, 'r') as f:
+        # Extrair dados brutos e IDs dos sensores
+        data = f['df']['block0_values'][:]
+        sensor_ids = f['df']['axis0'][:]
+        sensor_ids = [s.decode('utf-8') if isinstance(s, bytes) else str(s) for s in sensor_ids]
+        
+        print(f"   > Shape original no H5: {data.shape}")
+        print(f"   > Quantidade de sensores: {len(sensor_ids)}")
+
+        # AJUSTE DE SHAPE:
+        # O DataFrame precisa ter o tempo nas linhas e os sensores nas colunas.
+        # Se a primeira dimensão (data.shape[0]) for igual ao número de sensores, 
+        # significa que os dados precisam ser transpostos (.T).
+        if data.shape[0] == len(sensor_ids):
+            df = pd.DataFrame(data.T, columns=sensor_ids)
+        else:
+            df = pd.DataFrame(data, columns=sensor_ids)
+            
+        df.to_csv(os.path.join(processed_dir, 'METR-LA_series.csv'), index=False)
     
-    # 1. Identifica o que não é número nem booleano (ex: strings residuais)
-    cols_para_remover = df.select_dtypes(exclude=[np.number, bool]).columns.tolist()
-    if cols_para_remover:
-        print(f"⚠️ Removendo colunas incompatíveis: {cols_para_remover}")
-        df = df.drop(columns=cols_para_remover)
+    print(f"✅ CSV gerado com sucesso: {df.shape[0]} linhas x {df.shape[1]} colunas.")
 
-    # 2. Garante que Latitude e Longitude não entrem nas features de treino
-    x_columns = [col for col in df.columns if col not in ['Latitude', 'Longitude']]
+    # 2. Processar a Matriz de Adjacência (Grafo)
+    print("⏳ Processando matriz de adjacência...")
+    with open(os.path.join(raw_dir, 'adj_METR-LA.pkl'), 'rb') as f:
+        # O formato padrão do pkl do METR-LA retorna [ids, id_to_ind, adj_mx]
+        adj_data = pickle.load(f, encoding='latin1')
+        adj_mx = adj_data[2] # A matriz é o terceiro elemento
     
-    # 3. Converte tudo (incluindo bools do One-Hot) para float32
-    x_data = df[x_columns].astype(np.float32).values
-    x_tensor = torch.tensor(x_data, dtype=torch.float)
-
-    # Extração das Coordenadas
-    coords = df[['Longitude', 'Latitude']].values
-    num_nodes = len(coords)
-
-    # Construção da Matriz de Adjacência
-    print(f"Calculando conexões (Raio: {threshold_km}km)...")
-    dist_matrix = cdist(coords, coords, lambda u, v: haversine_np(u[0], u[1], v[0], v[1]))
-    rows, cols = np.where((dist_matrix <= threshold_km) & (dist_matrix > 0))
+    adj_mx = adj_mx.astype(np.float32)
+    rows, cols = np.where(adj_mx > 0)
+    
     edge_index = torch.tensor(np.array([rows, cols]), dtype=torch.long)
+    edge_attr = torch.tensor(adj_mx[rows, cols], dtype=torch.float)
     
-    distances = dist_matrix[rows, cols]
-    edge_attr = torch.tensor(1.0 / (distances + 1e-5), dtype=torch.float)
-
-    # Preparação das Features de Nó (X)
-    # Garantimos que Latitude e Longitude não entrem como features de treino
-    x_columns = [col for col in df.columns if col not in ['Latitude', 'Longitude']]
-    
-    # CONVERSÃO FORÇADA: Converte para float32 antes de virar tensor do PyTorch
-    x_data = df[x_columns].values.astype(np.float32) 
-    x_tensor = torch.tensor(x_data, dtype=torch.float)
-
-    # Salvamento
-    torch.save(edge_index, os.path.join(output_dir, 'edge_index.pt'))
-    torch.save(edge_attr, os.path.join(output_dir, 'edge_attr.pt'))
-    torch.save(x_tensor, os.path.join(output_dir, 'x_features.pt'))
-
-    print("-" * 40)
-    print("✅ TENSORES GERADOS COM SUCESSO")
-    print(f"Shape do Tensor X: {x_tensor.shape} (Nós, Features)")
-    print(f"Arestas no Grafo: {edge_index.shape[1]}")
-    print("-" * 40)
-
-    return int(edge_index.shape[1])
+    torch.save(edge_index, os.path.join(processed_dir, 'edge_index.pt'))
+    torch.save(edge_attr, os.path.join(processed_dir, 'edge_attr.pt'))
+    print(f"✅ Grafo preparado com {edge_index.shape[1]} conexões.")
 
 if __name__ == "__main__":
-    gerar_grafo_stgcn()
+    preparar_tudo()
