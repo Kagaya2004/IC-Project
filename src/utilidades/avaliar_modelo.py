@@ -3,9 +3,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 import datetime
+import pandas as pd
 from src.modelos.modelo_STGCN import STGCN_TrafficModel
-from src.preprocessamento.dataLoader_STGCN import METRLADataset
-from torch.utils.data import DataLoader
+from src.preprocessamento.dataLoader_STGCN import METRLADataset, DataLoader
 
 def avaliar_modelo():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -13,72 +13,66 @@ def avaliar_modelo():
     data_dir = os.path.join(base_dir, 'data', 'tratados')
     log_dir = os.path.join(base_dir, 'data', 'logs')
     model_path = os.path.join(base_dir, 'src', 'modelos', 'stgcn_metrla.pth')
-    os.makedirs(log_dir, exist_ok=True)
-
-    # 1. Configuração do Log de Avaliação
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    eval_log = os.path.join(log_dir, f"avaliacao_resultado_{timestamp}.txt")
-    plot_path = os.path.join(log_dir, f"grafico_previsao_{timestamp}.png")
-
-    # 2. Carregar Dados e Modelo
-    dataset = METRLADataset()
-    test_size = int(0.2 * len(dataset))
-    _, test_ds = torch.utils.data.random_split(dataset, [len(dataset)-test_size, test_size])
-    test_loader = DataLoader(test_ds, batch_size=1, shuffle=False)
-
-    edge_index = torch.load(os.path.join(data_dir, 'edge_index.pt'), weights_only=True).to(device)
-    edge_attr = torch.load(os.path.join(data_dir, 'edge_attr.pt'), weights_only=True).to(device)
     
-    model = STGCN_TrafficModel(num_features=1).to(device)
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    eval_log = os.path.join(log_dir, f"avaliacao_final_{timestamp}.txt")
+
+    dataset = METRLADataset()
+    # Usamos batch_size=1 para avaliação detalhada
+    test_loader = DataLoader(dataset, batch_size=1, shuffle=False)
+    
+    model = STGCN_TrafficModel(num_features=5).to(device)
     model.load_state_dict(torch.load(model_path, weights_only=True))
     model.eval()
 
-    previsoes, reais = [], []
+    edge_index = torch.load(os.path.join(data_dir, 'edge_index.pt'), weights_only=True).to(device)
+    edge_attr = torch.load(os.path.join(data_dir, 'edge_attr.pt'), weights_only=True).to(device)
 
-    print("🧐 Avaliando modelo e gerando métricas...")
+    preds, actuals = [], []
+    print("🧐 Realizando inferência em km/h...")
+    
     with torch.no_grad():
-        for x_batch, y_batch in test_loader:
-            x_batch = x_batch.to(device)
-            output = model(x_batch, edge_index, edge_weight=edge_attr)
-            previsoes.append(output.cpu().numpy())
-            reais.append(y_batch.numpy())
+        for i, (x, y) in enumerate(test_loader):
+            if i > 5000: break # Avalia 5000 amostras para velocidade
+            out = model(x.to(device), edge_index, edge_weight=edge_attr)
+            preds.append(out.cpu().numpy())
+            actuals.append(y.numpy())
 
-    # 3. Processamento de Resultados
-    previsoes = np.array(previsoes).reshape(-1, 207)
-    reais = np.array(reais).reshape(-1, 207)
+    # Converter para km/h (Desnormalização)
+    preds_kmh = (np.array(preds).reshape(-1, 207) * dataset.std) + dataset.mean
+    actuals_kmh = (np.array(actuals).reshape(-1, 207) * dataset.std) + dataset.mean
 
-    # Desnormalização
-    mean, std = dataset.mean, dataset.std
-    previsoes_kmh = (previsoes * std) + mean
-    reais_kmh = (reais * std) + mean
+    # 4. Cálculo das Métricas Finais (Comparação MSE vs MAE)
+    # Ignorando os zeros para métricas justas
+    mask = actuals_kmh > 0
+    mae_final = np.abs(preds_kmh[mask] - actuals_kmh[mask]).mean()
+    mse_final = ((preds_kmh[mask] - actuals_kmh[mask])**2).mean()
+    rmse_final = np.sqrt(mse_final)
 
-    # Métricas
-    mae = np.mean(np.abs(reais_kmh - previsoes_kmh))
-    rmse = np.sqrt(np.mean((reais_kmh - previsoes_kmh)**2))
-
-    # 4. Guardar Log Final
     res_msg = (
-        f"--- RESULTADO DA AVALIAÇÃO ({datetime.datetime.now()}) ---\n"
-        f"Métrica MAE: {mae:.4f} km/h\n"
-        f"Métrica RMSE: {rmse:.4f} km/h\n"
-        f"Amostras de teste: {len(test_ds)}\n"
-        f"------------------------------------------\n"
+        f"--- RELATÓRIO DE AVALIAÇÃO ---\n"
+        f"Data/Hora: {datetime.datetime.now()}\n"
+        f"Métrica MAE (Erro Médio): {mae_final:.4f} km/h\n"
+        f"Métrica MSE (Erro Quadrático): {mse_final:.4f}\n"
+        f"Métrica RMSE (Raiz do MSE): {rmse_final:.4f} km/h\n"
+        f"------------------------------"
     )
     print(res_msg)
     with open(eval_log, "w", encoding='utf-8') as f:
         f.write(res_msg)
 
-    # 5. Gerar e Salvar Gráfico
-    sensor_id = 10 
+    # Gráfico de Comparação
     plt.figure(figsize=(12, 6))
-    plt.plot(reais_kmh[:100, sensor_id], label='Real', color='blue', alpha=0.7)
-    plt.plot(previsoes_kmh[:100, sensor_id], label='Predito', color='red', linestyle='--')
-    plt.title(f'Predição de Velocidade - Sensor {sensor_id}')
-    plt.ylabel('km/h')
+    sensor_alvo = 0
+    plt.plot(actuals_kmh[:120, sensor_alvo], label='Real (km/h)', color='#1f77b4', linewidth=2)
+    plt.plot(preds_kmh[:120, sensor_alvo], label='Previsto (km/h)', color='#d62728', linestyle='--')
+    plt.title(f'Desempenho do Modelo ST-GCN - Sensor {sensor_alvo}')
+    plt.xlabel('Passos de Tempo (Próximas 10 horas)')
+    plt.ylabel('Velocidade')
     plt.legend()
     plt.grid(True, alpha=0.3)
-    plt.savefig(plot_path)
-    print(f"📈 Gráfico guardado em: {plot_path}")
+    plt.savefig(os.path.join(log_dir, f"plot_final_{timestamp}.png"))
+    print(f"📊 Gráfico e Log salvos em: {log_dir}")
 
 if __name__ == "__main__":
     avaliar_modelo()

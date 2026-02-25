@@ -16,26 +16,25 @@ def preparar_tudo():
     h5_path = os.path.join(raw_dir, 'METR-LA.h5')
     
     with h5py.File(h5_path, 'r') as f:
-        # Extrair dados brutos e IDs dos sensores
         data = f['df']['block0_values'][:]
         sensor_ids = f['df']['axis0'][:]
         sensor_ids = [s.decode('utf-8') if isinstance(s, bytes) else str(s) for s in sensor_ids]
+        timestamps = f['df']['axis1'][:]
         
-        print(f"   > Shape original no H5: {data.shape}")
-        print(f"   > Quantidade de sensores: {len(sensor_ids)}")
-
-        # AJUSTE DE SHAPE:
-        # O DataFrame precisa ter o tempo nas linhas e os sensores nas colunas.
-        # Se a primeira dimensão (data.shape[0]) for igual ao número de sensores, 
-        # significa que os dados precisam ser transpostos (.T).
+        # Criando nomes amigáveis: Sensor_773869, etc.
+        friendly_sensor_names = [f"Sensor_{sid}" for sid in sensor_ids]
+        
         if data.shape[0] == len(sensor_ids):
-            df = pd.DataFrame(data.T, columns=sensor_ids)
+            df_vel = pd.DataFrame(data.T, columns=friendly_sensor_names)
         else:
-            df = pd.DataFrame(data, columns=sensor_ids)
-            
-        df.to_csv(os.path.join(processed_dir, 'METR-LA_series.csv'), index=False)
+            df_vel = pd.DataFrame(data, columns=friendly_sensor_names)
+        
+        # GARANTA QUE O NOME SEJA 'Timestamp'
+        df_vel.insert(0, 'Timestamp', pd.to_datetime(timestamps))
+        
+        df_vel.to_csv(os.path.join(processed_dir, 'METR-LA_series.csv'), index=False)
     
-    print(f"✅ CSV gerado com sucesso: {df.shape[0]} linhas x {df.shape[1]} colunas.")
+    print(f"✅ CSV gerado com sucesso: {df_vel.shape[0]} linhas x {df_vel.shape[1]} colunas.")
 
     # 2. Processar a Matriz de Adjacência (Grafo)
     print("⏳ Processando matriz de adjacência...")
