@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 import datetime
-import pandas as pd
+import time
 from src.modelos.modelo_STGCN import STGCN_TrafficModel
 from src.preprocessamento.dataLoader_STGCN import METRLADataset, DataLoader
 
@@ -15,10 +15,9 @@ def avaliar_modelo():
     model_path = os.path.join(base_dir, 'src', 'modelos', 'stgcn_metrla.pth')
     
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    eval_log = os.path.join(log_dir, f"avaliacao_final_{timestamp}.txt")
+    eval_log = os.path.join(log_dir, f"avaliacao_performance_{timestamp}.txt")
 
     dataset = METRLADataset()
-    # Usamos batch_size=1 para avaliação detalhada
     test_loader = DataLoader(dataset, batch_size=1, shuffle=False)
     
     model = STGCN_TrafficModel(num_features=5).to(device)
@@ -29,50 +28,52 @@ def avaliar_modelo():
     edge_attr = torch.load(os.path.join(data_dir, 'edge_attr.pt'), weights_only=True).to(device)
 
     preds, actuals = [], []
-    print("🧐 Realizando inferência em km/h...")
+    latencias = [] # Para medir milissegundos por inferência
+    
+    print("🧐 Iniciando Avaliação de Precisão e Latência...")
     
     with torch.no_grad():
         for i, (x, y) in enumerate(test_loader):
-            if i > 5000: break # Avalia 5000 amostras para velocidade
+            if i > 2000: break # Avaliando amostra significativa
+            
+            # --- CRONÔMETRO DE INFERÊNCIA ---
+            start_inf = time.time()
             out = model(x.to(device), edge_index, edge_weight=edge_attr)
+            end_inf = time.time()
+            
+            latencias.append((end_inf - start_inf) * 1000) # Converter para ms
             preds.append(out.cpu().numpy())
             actuals.append(y.numpy())
 
-    # Converter para km/h (Desnormalização)
+    # Processamento de Métricas
     preds_kmh = (np.array(preds).reshape(-1, 207) * dataset.std) + dataset.mean
     actuals_kmh = (np.array(actuals).reshape(-1, 207) * dataset.std) + dataset.mean
-
-    # 4. Cálculo das Métricas Finais (Comparação MSE vs MAE)
-    # Ignorando os zeros para métricas justas
+    
     mask = actuals_kmh > 0
-    mae_final = np.abs(preds_kmh[mask] - actuals_kmh[mask]).mean()
-    mse_final = ((preds_kmh[mask] - actuals_kmh[mask])**2).mean()
-    rmse_final = np.sqrt(mse_final)
+    mae = np.abs(preds_kmh[mask] - actuals_kmh[mask]).mean()
+    mse = ((preds_kmh[mask] - actuals_kmh[mask])**2).mean()
+    latencia_media = np.mean(latencias)
 
     res_msg = (
-        f"--- RELATÓRIO DE AVALIAÇÃO ---\n"
-        f"Data/Hora: {datetime.datetime.now()}\n"
-        f"Métrica MAE (Erro Médio): {mae_final:.4f} km/h\n"
-        f"Métrica MSE (Erro Quadrático): {mse_final:.4f}\n"
-        f"Métrica RMSE (Raiz do MSE): {rmse_final:.4f} km/h\n"
-        f"------------------------------"
+        f"--- RELATÓRIO DE PERFORMANCE ---\n"
+        f"Data: {datetime.datetime.now()}\n"
+        f"MAE Final: {mae:.4f} km/h\n"
+        f"MSE Final: {mse:.4f}\n"
+        f"Latência Média: {latencia_media:.2f} ms por predição\n"
+        f"--------------------------------"
     )
+    
     print(res_msg)
     with open(eval_log, "w", encoding='utf-8') as f:
         f.write(res_msg)
 
-    # Gráfico de Comparação
-    plt.figure(figsize=(12, 6))
-    sensor_alvo = 0
-    plt.plot(actuals_kmh[:120, sensor_alvo], label='Real (km/h)', color='#1f77b4', linewidth=2)
-    plt.plot(preds_kmh[:120, sensor_alvo], label='Previsto (km/h)', color='#d62728', linestyle='--')
-    plt.title(f'Desempenho do Modelo ST-GCN - Sensor {sensor_alvo}')
-    plt.xlabel('Passos de Tempo (Próximas 10 horas)')
-    plt.ylabel('Velocidade')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.savefig(os.path.join(log_dir, f"plot_final_{timestamp}.png"))
-    print(f"📊 Gráfico e Log salvos em: {log_dir}")
+    # Gráfico
+    plt.figure(figsize=(10, 5))
+    plt.plot(actuals_kmh[:100, 0], label='Real', color='blue')
+    plt.plot(preds_kmh[:100, 0], label='Previsto', color='red', linestyle='--')
+    plt.title('Predição ST-GCN: Real vs Previsto')
+    plt.legend(); plt.grid(True)
+    plt.savefig(os.path.join(log_dir, f"grafico_inf_{timestamp}.png"))
 
 if __name__ == "__main__":
     avaliar_modelo()
