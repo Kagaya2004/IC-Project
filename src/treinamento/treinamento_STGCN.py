@@ -99,7 +99,7 @@ def treinar_modelo():
         # 2. Lógica de "Best Model" (Salva se for o melhor resultado até agora)
         if avg_val_mae < best_val_mae:
             best_val_mae = avg_val_mae
-            torch.save(model.state_dict(), os.path.join(model_dir, 'stgcn_metrla_best.pth'))
+            torch.save(model.state_dict(), os.path.join(model_dir, 'stgcn_metrla.pth'))
             status_best = "⭐ [Novo Melhor!]"
         else:
             status_best = ""
