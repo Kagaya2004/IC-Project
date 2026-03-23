@@ -23,7 +23,7 @@ def analise_espacial_erro():
     
     # ST-GCN
     stgcn = STGCN_TrafficModel(num_features=5).to(device)
-    stgcn.load_state_dict(torch.load(os.path.join(model_dir, 'stgcn_best_comparativo.pth'), weights_only=True))
+    stgcn.load_state_dict(torch.load(os.path.join(model_dir, 'stgcn_model.pth'), weights_only=True))
     stgcn.eval()
     edge_index = torch.load(os.path.join(data_dir, 'edge_index_stgcn.pt'), weights_only=True).to(device)
     edge_attr = torch.load(os.path.join(data_dir, 'edge_attr_stgcn.pt'), weights_only=True).to(device)
@@ -31,7 +31,7 @@ def analise_espacial_erro():
     # DCRNN
     adj_dcrnn = torch.load(os.path.join(data_dir, 'adj_mx_dcrnn.pt'), weights_only=True).to(device)
     dcrnn = DCRNNModel(adj_matrices=adj_dcrnn, in_channels=5).to(device)
-    dcrnn.load_state_dict(torch.load(os.path.join(model_dir, 'dcrnn_best_comparativo.pth'), weights_only=True))
+    dcrnn.load_state_dict(torch.load(os.path.join(model_dir, 'dcrnn_model.pth'), weights_only=True))
     dcrnn.eval()
 
     # 3. Acumuladores de Erro por Sensor (207 sensores)
@@ -73,7 +73,7 @@ def analise_espacial_erro():
                 boxprops=dict(facecolor='#D3D3D3', color='black'),
                 medianprops=dict(color='red', linewidth=2))
     
-    plt.title('Distribuição do Erro (MAE) entre os 207 Sensores', fontsize=14)
+    plt.title('Distribuição do MAE entre os 207 sensores da rede viária', fontsize=14)
     plt.ylabel('MAE (km/h)', fontsize=12)
     plt.grid(True, axis='y', linestyle='--', alpha=0.7)
     
@@ -84,7 +84,7 @@ def analise_espacial_erro():
     plt.figure(figsize=(12, 6))
     plt.scatter(range(207), mae_stgcn_final, alpha=0.6, label='ST-GCN', color='blue', s=20)
     plt.scatter(range(207), mae_dcrnn_final, alpha=0.6, label='DCRNN', color='red', s=20)
-    plt.title('MAE por Índice de Sensor: Comparação Lado a Lado', fontsize=14)
+    plt.title('Evolução do MAE (km/h) em relação ao horizonte de previsão', fontsize=14)
     plt.xlabel('ID do Sensor (Índice)', fontsize=12)
     plt.ylabel('MAE (km/h)', fontsize=12)
     plt.legend()
