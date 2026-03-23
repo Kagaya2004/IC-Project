@@ -55,7 +55,7 @@ def treinar_lstm():
             f.write(msg + "\n")
 
     # Aumentamos o batch_size significativamente porque as amostras são muito menores (1 nó por vez)
-    batch_size = 512 
+    batch_size = 1024 
     epochs = 50
     lr = 0.001
     
