@@ -24,12 +24,12 @@ def analise_horizonte_completo():
     # DCRNN (Nativa multi-passo)
     adj_dcrnn = torch.load(os.path.join(data_dir, 'adj_mx_dcrnn.pt'), weights_only=True).to(device)
     dcrnn = DCRNNModel(adj_matrices=adj_dcrnn, in_channels=5).to(device)
-    dcrnn.load_state_dict(torch.load(os.path.join(model_dir, 'dcrnn_best_comparativo.pth'), weights_only=True))
+    dcrnn.load_state_dict(torch.load(os.path.join(model_dir, 'dcrnn_model.pth'), weights_only=True))
     dcrnn.eval()
 
     # ST-GCN (Como a nossa ST-GCN é single-step, usaremos ela como base para t+1)
     stgcn = STGCN_TrafficModel(num_features=5).to(device)
-    stgcn.load_state_dict(torch.load(os.path.join(model_dir, 'stgcn_best_comparativo.pth'), weights_only=True))
+    stgcn.load_state_dict(torch.load(os.path.join(model_dir, 'stgcn_model.pth'), weights_only=True))
     stgcn.eval()
     edge_index = torch.load(os.path.join(data_dir, 'edge_index_stgcn.pt'), weights_only=True).to(device)
     edge_attr = torch.load(os.path.join(data_dir, 'edge_attr_stgcn.pt'), weights_only=True).to(device)
@@ -87,7 +87,7 @@ def analise_horizonte_completo():
     plt.plot(minutos, final_mae_dcrnn, marker='o', label='DCRNN (Multi-step)', color='red', linewidth=2)
     plt.scatter([5], [final_mae_stgcn_t1], color='blue', s=100, label='ST-GCN (Single-step)', zorder=5)
     
-    plt.title('Evolução do Erro (MAE) conforme o Horizonte de Predição', fontsize=14)
+    plt.title('Evolução do MAE (km/h) em relação ao horizonte de previsão', fontsize=14)
     plt.xlabel('Minutos à frente (Horizonte)', fontsize=12)
     plt.ylabel('MAE (km/h)', fontsize=12)
     plt.xticks(minutos)
