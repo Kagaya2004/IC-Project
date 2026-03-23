@@ -17,7 +17,7 @@ def treinar_stgcn():
     os.makedirs(log_dir, exist_ok=True)
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = os.path.join(log_dir, f"treino_stgcn_comparativo_{timestamp}.txt")
+    log_file = os.path.join(log_dir, f"treino_stgcn_{timestamp}.txt")
     
     def log_print(msg):
         print(msg)
@@ -91,7 +91,7 @@ def treinar_stgcn():
         # Checkpoint do melhor modelo
         if avg_val_mae < best_val_mae:
             best_val_mae = avg_val_mae
-            torch.save(model.state_dict(), os.path.join(model_dir, 'stgcn_best_comparativo.pth'))
+            torch.save(model.state_dict(), os.path.join(model_dir, 'stgcn_model.pth'))
             status = "⭐ Melhor Modelo!"
         else:
             status = ""

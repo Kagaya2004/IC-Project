@@ -17,7 +17,7 @@ def treinar_dcrnn():
     os.makedirs(log_dir, exist_ok=True)
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = os.path.join(log_dir, f"treino_dcrnn_comparativo_{timestamp}.txt")
+    log_file = os.path.join(log_dir, f"treino_dcrnn_{timestamp}.txt")
     
     def log_print(msg):
         print(msg)
@@ -90,7 +90,7 @@ def treinar_dcrnn():
         
         if avg_val_mae < best_val_mae:
             best_val_mae = avg_val_mae
-            torch.save(model.state_dict(), os.path.join(model_dir, 'dcrnn_best_comparativo.pth'))
+            torch.save(model.state_dict(), os.path.join(model_dir, 'dcrnn_model.pth'))
             status = "⭐ Melhor Modelo!"
         else:
             status = ""
