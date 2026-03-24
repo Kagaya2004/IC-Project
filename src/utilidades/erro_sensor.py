@@ -84,13 +84,13 @@ def analise_espacial_erro():
     plt.figure(figsize=(12, 6))
     plt.scatter(range(207), mae_stgcn_final, alpha=0.6, label='ST-GCN', color='blue', s=20)
     plt.scatter(range(207), mae_dcrnn_final, alpha=0.6, label='DCRNN', color='red', s=20)
-    plt.title('Evolução do MAE (km/h) em relação ao horizonte de previsão', fontsize=14)
+    plt.title('Distribuição do erro MAE por sensor individual ao longo do horizonte de previsão', fontsize=14)
     plt.xlabel('ID do Sensor (Índice)', fontsize=12)
     plt.ylabel('MAE (km/h)', fontsize=12)
     plt.legend()
     plt.grid(True, alpha=0.3)
     
-    scatter_path = os.path.join(log_dir, "mae_por_sensor_scatter.png")
+    scatter_path = os.path.join(log_dir, "mae_por_sensor_.png")
     plt.savefig(scatter_path)
 
     print(f"✅ Análise concluída!")
