@@ -64,14 +64,14 @@ if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
     # Simulação: Como estamos no modelo Local (Por Nó), o DataLoader entrega
-    # batches muito maiores. Ex: 512 amostras independentes, 12 passos de tempo, 5 features.
+    # batches muito maiores. Ex: 1024 amostras independentes, 12 passos de tempo, 5 features.
     model = LSTM_TrafficModel(num_features=5).to(device)
-    dummy_x = torch.randn(512, 12, 5).to(device)
+    dummy_x = torch.randn(1024, 12, 5).to(device)
     
     print(f"🚀 Testando modelo LSTM no dispositivo: {device}")
     
     # Note que a LSTM não recebe 'edge_index' (o grafo), apenas os dados sequenciais 'x'
     output = model(dummy_x)
     
-    print(f"✅ Sucesso! Shape da saída: {output.shape}") # Esperado: torch.Size([512])
+    print(f"✅ Sucesso! Shape da saída: {output.shape}") # Esperado: torch.Size([1024])
     print(f"📊 Parâmetros totais: {sum(p.numel() for p in model.parameters()):,}")
