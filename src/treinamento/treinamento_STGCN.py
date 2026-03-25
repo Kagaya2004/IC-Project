@@ -8,7 +8,7 @@ import pandas as pd
 from src.modelos.modelo_STGCN import STGCN_TrafficModel
 from src.preprocessamento.dataLoader_Traffic import preparar_loaders
 
-def treinar_stgcn():
+def treinar_stgcn_multi_step():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     base_dir = r'C:\IC\Projeto_V2'
     data_dir = os.path.join(base_dir, 'data', 'tratados')
@@ -24,17 +24,17 @@ def treinar_stgcn():
         with open(log_file, "a", encoding='utf-8') as f:
             f.write(msg + "\n")
 
-    # 1. Configurações do Experimento
-    # Usamos horizon=12 no loader, mas a ST-GCN focará no primeiro passo (t+1)
+    # 1. Configurações de Paridade (Horizonte de 12 passos = 1 hora)
     batch_size = 32
     epochs = 50
     lr = 0.001
     
+    # Loader configurado para 12 de entrada e 12 de saída
     train_loader, test_loader = preparar_loaders(batch_size=batch_size, window_size=12, horizon=12)
     
     model = STGCN_TrafficModel(num_features=5).to(device)
     
-    # Carregamento do Grafo (Específico para ST-GCN: Simétrico)
+    # Carregamento do Grafo (Matriz de Adjacência Symmetrizada)
     edge_index = torch.load(os.path.join(data_dir, 'edge_index_stgcn.pt'), weights_only=True).to(device)
     edge_attr = torch.load(os.path.join(data_dir, 'edge_attr_stgcn.pt'), weights_only=True).to(device)
 
@@ -42,7 +42,7 @@ def treinar_stgcn():
     mae_criterion = nn.L1Loss(reduction='none')
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
 
-    log_print(f"📊 [ST-GCN] Início do Experimento Comparativo")
+    log_print(f"📊 [ST-GCN] Iniciando Experimento")
     log_print(f"💻 GPU: {torch.cuda.get_device_name(0)}")
     
     best_val_mae = float('inf')
@@ -55,17 +55,14 @@ def treinar_stgcn():
         train_loss = 0
         
         for x, y in train_loader:
-            x, y = x.to(device), y.to(device)
-            # y original do loader: [Batch, Horizon, Nodes]
-            # Selecionamos apenas o primeiro passo (t+1) para a ST-GCN
-            target = y[:, 0, :] 
+            x, y = x.to(device), y.to(device) # y: [Batch, 12, Nodes]
             
             optimizer.zero_grad()
-            output = model(x, edge_index, edge_weight=edge_attr)
+            output = model(x, edge_index, edge_weight=edge_attr) # output: [Batch, 12, Nodes]
             
-            # Masked Loss (ignora zeros)
-            mask = (target > 0).float()
-            loss = (mae_criterion(output, target) * mask).sum() / (mask.sum() + 1e-8)
+            # MUDANÇA: Perda calculada sobre os 12 passos simultaneamente
+            mask = (y > 0).float()
+            loss = (mae_criterion(output, y) * mask).sum() / (mask.sum() + 1e-8)
             
             loss.backward()
             optimizer.step()
@@ -77,18 +74,16 @@ def treinar_stgcn():
         with torch.no_grad():
             for xv, yv in test_loader:
                 xv, yv = xv.to(device), yv.to(device)
-                target_v = yv[:, 0, :]
                 pred = model(xv, edge_index, edge_weight=edge_attr)
                 
-                mask_v = (target_v > 0).float()
-                v_mae = (mae_criterion(pred, target_v) * mask_v).sum() / (mask_v.sum() + 1e-8)
+                mask_v = (yv > 0).float()
+                v_mae = (mae_criterion(pred, yv) * mask_v).sum() / (mask_v.sum() + 1e-8)
                 val_mae += v_mae.item()
 
         avg_train_mae = train_loss / len(train_loader)
         avg_val_mae = val_mae / len(test_loader)
         scheduler.step(avg_val_mae)
         
-        # Checkpoint do melhor modelo
         if avg_val_mae < best_val_mae:
             best_val_mae = avg_val_mae
             torch.save(model.state_dict(), os.path.join(model_dir, 'stgcn_model.pth'))
@@ -96,20 +91,12 @@ def treinar_stgcn():
         else:
             status = ""
 
-        log_print(f"Ep [{epoch+1:02d}/{epochs}] | Train: {avg_train_mae:.4f} | Val: {avg_val_mae:.4f} | LR: {optimizer.param_groups[0]['lr']:.6f} {status}")
-        
+        log_print(f"Ep [{epoch+1:02d}/{epochs}] | Train MAE: {avg_train_mae:.4f} | Val MAE: {avg_val_mae:.4f} {status}")
         history.append({"epoch": epoch+1, "train_mae": avg_train_mae, "val_mae": avg_val_mae})
 
-    end_train = time.time()
-    total_time = str(datetime.timedelta(seconds=int(end_train - start_train)))
-    
-    log_print("\n" + "="*50)
-    log_print(f"🏆 Treino ST-GCN Finalizado em {total_time}")
-    log_print(f"📉 Melhor MAE alcançado: {best_val_mae:.4f}")
-    log_print("="*50)
-
-    # Salva histórico para gráficos comparativos
+    total_time = str(datetime.timedelta(seconds=int(time.time() - start_train)))
+    log_print(f"\n🏆 Treino ST-GCN Finalizado em {total_time}")
     pd.DataFrame(history).to_csv(os.path.join(log_dir, f"history_stgcn_{timestamp}.csv"), index=False)
 
 if __name__ == "__main__":
-    treinar_stgcn()
+    treinar_stgcn_multi_step()

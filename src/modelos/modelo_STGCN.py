@@ -1,94 +1,119 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import GCNConv
+
+class TemporalConv(nn.Module):
+    """
+    Camada de Convolução Temporal utilizando Gated Linear Units (GLU).
+    """
+    def __init__(self, in_channels, out_channels, kernel_size=3):
+        super(TemporalConv, self).__init__()
+        self.conv = nn.Conv2d(in_channels, out_channels * 2, (kernel_size, 1), padding=(1, 0))
+
+    def forward(self, x):
+        # x: [Batch, Channels, Time, Nodes]
+        x_conv = self.conv(x)
+        # GLU: Divide os canais ao meio e aplica sigmoid em uma das partes
+        p, q = torch.split(x_conv, x_conv.shape[1] // 2, dim=1)
+        return p * torch.sigmoid(q)
+
+class SpatialConv(nn.Module):
+    """
+    Camada de Convolução Espacial (Graph Convolution).
+    Utiliza o edge_index e edge_weight processados no preparar_grafo.py.
+    """
+    def __init__(self, in_channels, out_channels):
+        super(SpatialConv, self).__init__()
+        self.theta = nn.Linear(in_channels, out_channels)
+
+    def forward(self, x, edge_index, edge_weight):
+        # x: [Batch, Channels, Time, Nodes]
+        # Ajustamos para processar a vizinhança no grafo
+        batch, c, t, n = x.shape
+        x_flat = x.permute(0, 2, 3, 1).reshape(-1, n, c) # [B*T, N, C]
+        
+        # Propagação simples de mensagens (pode ser substituído por GCNConv do PyG se preferir)
+        # Aqui simulamos a agregação via matriz de adjacência
+        adj = torch.zeros((n, n), device=x.device)
+        adj[edge_index[0], edge_index[1]] = edge_weight
+        
+        # Agregação: D^-1 * A * X
+        out = torch.matmul(adj, x_flat) # [B*T, N, C]
+        out = self.theta(out) # Projeção linear
+        
+        # Volta para o formato original [Batch, Out_Channels, Time, Nodes]
+        out = out.reshape(batch, t, n, -1).permute(0, 3, 1, 2)
+        return F.relu(out)
+
+class STConvBlock(nn.Module):
+    """
+    Bloco ST-Conv: Temporal -> Espacial -> Temporal
+    """
+    def __init__(self, in_channels, hidden_channels, out_channels):
+        super(STConvBlock, self).__init__()
+        self.tmp_conv1 = TemporalConv(in_channels, hidden_channels)
+        self.spa_conv = SpatialConv(hidden_channels, hidden_channels)
+        self.tmp_conv2 = TemporalConv(hidden_channels, out_channels)
+        self.ln = nn.LayerNorm(out_channels)
+
+    def forward(self, x, edge_index, edge_weight):
+        x = self.tmp_conv1(x)
+        x = self.spa_conv(x, edge_index, edge_weight)
+        x = self.tmp_conv2(x)
+        # Normalização de camada para estabilidade
+        batch, c, t, n = x.shape
+        x = self.ln(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+        return x
 
 class STGCN_TrafficModel(nn.Module):
-    def __init__(self, num_features=5, hidden_dim=64, output_dim=1, dropout=0.2):
-        """
-        Arquitetura ST-GCN Refinada.
-        num_features: 5 (Velocidade + 4 Features Temporais)
-        """
+    def __init__(self, num_nodes=207, num_features=5, num_timesteps_input=12, num_timesteps_output=12):
         super(STGCN_TrafficModel, self).__init__()
         
-        self.hidden_dim = hidden_dim
-
-        # 1. Embedding + Normalização
-        # A LayerNorm ajuda a estabilizar as 5 features diferentes antes da GCN
-        self.embedding = nn.Linear(num_features, hidden_dim)
-        self.ln_embed = nn.LayerNorm(hidden_dim)
+        # Camada de entrada para ajustar as 5 features iniciais
+        self.input_conv = nn.Conv2d(num_features, 64, kernel_size=(1, 1))
         
-        # 2. Camada Espacial: Graph Convolutional Network
-        self.spatial_gcn = GCNConv(hidden_dim, hidden_dim)
+        # Blocos Espaciais-Temporais
+        self.block1 = STConvBlock(64, 32, 64)
+        self.block2 = STConvBlock(64, 32, 64)
         
-        # 3. Camada Temporal: GRU
-        # A GRU processa a sequência de 12 timesteps (1 hora)
-        self.temporal_gru = nn.GRU(hidden_dim, hidden_dim, batch_first=False)
-        self.ln_temporal = nn.LayerNorm(hidden_dim)
-        
-        # 4. Regressão Final
-        self.regressor = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim // 2),
+        # Camada de saída para o Horizonte de 12 passos (1 hora)
+        # Reduzimos a dimensão temporal e projetamos para a saída desejada
+        self.fully_connected = nn.Sequential(
+            nn.Linear(64 * num_timesteps_input, 128),
             nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim // 2, output_dim)
+            nn.Linear(128, num_timesteps_output)
         )
 
-    def forward(self, x, edge_index, edge_weight=None):
-        # x shape esperado: [Batch, Time, Nodes, Features]
-        batch_size, T, num_nodes, num_features = x.shape
+    def forward(self, x, edge_index, edge_weight):
+        """
+        x: [Batch, Time=12, Nodes=207, Features=5]
+        """
+        # 1. Ajuste de dimensões para Conv2D: [B, F, T, N]
+        x = x.permute(0, 3, 1, 2) 
         
-        # --- PASSO 1: Embedding & Normalização ---
-        x = self.embedding(x)
-        x = self.ln_embed(x)
-        x = F.relu(x)
+        # 2. Projeção inicial
+        x = self.input_conv(x)
         
-        # --- PASSO 2: Bloco Espacial (GCN) ---
-        # Processamos cada passo de tempo T como um estado do grafo
-        out_spatial = []
-        for t in range(T):
-            xt = x[:, t, :, :] # [B, N, Hidden]
-            
-            # Para a GCNConv processar o batch corretamente, 
-            # tratamos o batch como subgrafos independentes
-            # Shape para a GCN: [B*N, Hidden]
-            xt_flat = xt.reshape(-1, self.hidden_dim)
-            
-            # Aplica GCN + Ativação
-            h = self.spatial_gcn(xt_flat, edge_index, edge_weight)
-            h = F.relu(h)
-            
-            # Retorna para o shape original [B, 1, N, Hidden]
-            out_spatial.append(h.reshape(batch_size, 1, num_nodes, self.hidden_dim))
+        # 3. Blocos ST-Conv
+        x = self.block1(x, edge_index, edge_weight)
+        x = self.block2(x, edge_index, edge_weight)
         
-        x = torch.cat(out_spatial, dim=1) # [B, T, N, Hidden]
+        # 4. Saída: [Batch, Channels, Time, Nodes] -> [Batch, Nodes, Channels * Time]
+        batch, c, t, n = x.shape
+        x = x.permute(0, 3, 1, 2).reshape(batch, n, -1)
         
-        # --- PASSO 3: Bloco Temporal (GRU) ---
-        # Mudamos de [Batch, Time, Nodes, Hidden] para [Time, Batch*Nodes, Hidden]
-        # Isso faz a GRU ver a evolução temporal de cada sensor separadamente
-        x = x.permute(1, 0, 2, 3).reshape(T, batch_size * num_nodes, self.hidden_dim)
+        # 5. Predição do Horizonte (12 passos)
+        out = self.fully_connected(x) # [Batch, Nodes, Horizon=12]
         
-        # Pegamos apenas o último estado oculto (o resumo do tempo)
-        _, h_n = self.temporal_gru(x) # h_n: [1, B*N, Hidden]
-        h_n = self.ln_temporal(h_n.squeeze(0)) # [B*N, Hidden]
-        
-        # --- PASSO 4: Regressão Final ---
-        out = self.regressor(h_n) # [B*N, 1]
-        
-        # Saída Final: [Batch, Nodes] (Velocidade prevista para cada sensor)
-        return out.reshape(batch_size, num_nodes)
+        # 6. Formato final compatível com o y do DataLoader: [Batch, Horizon, Nodes]
+        return out.permute(0, 2, 1)
 
 if __name__ == "__main__":
-    # Teste de Integridade com as novas 5 features
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # Teste de shape
+    dummy_x = torch.randn(32, 12, 207, 5)
+    dummy_edge_idx = torch.randint(0, 207, (2, 500))
+    dummy_edge_wt = torch.rand(500)
     
-    # Simulação: 16 batches, 12 timesteps, 207 sensores, 5 features
-    model = STGCN_TrafficModel(num_features=5).to(device)
-    dummy_x = torch.randn(16, 12, 207, 5).to(device)
-    dummy_edge = torch.randint(0, 207, (2, 500)).to(device)
-    
-    print(f"🚀 Testando modelo no dispositivo: {device}")
-    output = model(dummy_x, dummy_edge)
-    
-    print(f"✅ Sucesso! Shape da saída: {output.shape}") # Esperado: [16, 207]
-    print(f"📊 Parâmetros totais: {sum(p.numel() for p in model.parameters()):,}")
+    model = STGCN_TrafficModel()
+    pred = model(dummy_x, dummy_edge_idx, dummy_edge_wt)
+    print(f"Shape da saída: {pred.shape}") # Deve ser [32, 12, 207]
