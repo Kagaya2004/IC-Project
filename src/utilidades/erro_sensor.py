@@ -58,7 +58,7 @@ def analise_espacial_completa():
     plt.boxplot([mae_st_final, mae_dc_final], patch_artist=True, tick_labels=['ST-GCN', 'DCRNN'],
                 boxprops=dict(facecolor='#D3D3D3', color='black'),
                 medianprops=dict(color='red', linewidth=2))
-    plt.title('Distribuição Estatística do MAE entre os 207 sensores')
+    plt.title('Análise Estatística da Dispersão do Erro MAE entre os Sensores por Modelo')
     plt.ylabel('MAE Médio (km/h)')
     plt.grid(True, axis='y', linestyle='--', alpha=0.5)
     plt.savefig(os.path.join(log_dir, f"distribuicao_erro_boxplot_{timestamp}.png"), dpi=300)
@@ -67,8 +67,8 @@ def analise_espacial_completa():
     plt.figure(figsize=(12, 6))
     plt.scatter(range(207), mae_st_final, color='blue', alpha=0.6, s=20, label='ST-GCN')
     plt.scatter(range(207), mae_dc_final, color='red', alpha=0.6, s=20, label='DCRNN')
-    plt.title('Performance Individual por Sensor: ST-GCN vs DCRNN (Média 60 min)')
-    plt.xlabel('Índice do Sensor (Rede de LA)'); plt.ylabel('MAE Médio (km/h)'); plt.legend()
+    plt.title('Comparativo do Erro MAE Individual entre os 207 Sensores por Modelo')
+    plt.xlabel('Índice do Sensor'); plt.ylabel('MAE Médio (km/h)'); plt.legend()
     plt.grid(True, alpha=0.2)
     plt.savefig(os.path.join(log_dir, f"distribuicao_espacial_scatter_{timestamp}.png"), dpi=300)
 
