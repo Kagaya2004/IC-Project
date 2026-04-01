@@ -98,6 +98,7 @@ def avaliar_comparativo():
     y_st_np = np.array(y_st).squeeze() 
     y_dc_np = np.array(y_dc).squeeze()
 
+    # Desnormalização para km/h
     true_kmh = (y_true_np * dataset.std) + dataset.mean
     st_kmh = (y_st_np * dataset.std) + dataset.mean
     dc_kmh = (y_dc_np * dataset.std) + dataset.mean
@@ -106,20 +107,23 @@ def avaliar_comparativo():
         mask = target > 0
         mae = np.abs(pred[mask] - target[mask]).mean()
         rmse = np.sqrt(((pred[mask] - target[mask])**2).mean())
-        return mae, rmse
+        # Inclusão do cálculo do MAPE
+        mape = np.mean(np.abs((target[mask] - pred[mask]) / target[mask])) * 100
+        return mae, rmse, mape
 
-    mae_st_t1, rmse_st_t1 = get_metrics(st_kmh[:, 0, :], true_kmh[:, 0, :])
-    mae_dc_t1, rmse_dc_t1 = get_metrics(dc_kmh[:, 0, :], true_kmh[:, 0, :])
-    mae_st_avg, rmse_st_avg = get_metrics(st_kmh, true_kmh)
-    mae_dc_avg, rmse_dc_avg = get_metrics(dc_kmh, true_kmh)
+    # Coleta de métricas incluindo o MAPE
+    mae_st_t1, rmse_st_t1, mape_st_t1 = get_metrics(st_kmh[:, 0, :], true_kmh[:, 0, :])
+    mae_dc_t1, rmse_dc_t1, mape_dc_t1 = get_metrics(dc_kmh[:, 0, :], true_kmh[:, 0, :])
+    mae_st_avg, rmse_st_avg, mape_st_avg = get_metrics(st_kmh, true_kmh)
+    mae_dc_avg, rmse_dc_avg, mape_dc_avg = get_metrics(dc_kmh, true_kmh)
 
     relatorio = (
-        f"{'='*95}\n📊 RELATÓRIO DE DESEMPENHO MULTI-STEP (60 MIN)\n{'='*95}\n"
-        f"Modelo     | MAE T+1 | RMSE T+1 | MAE (1h) | RMSE (1h) | Latência (ms)\n"
-        f"-----------|---------|----------|----------|-----------|---------------\n"
-        f"ST-GCN     | {mae_st_t1:.4f}  | {rmse_st_t1:.4f}  | {mae_st_avg:.4f}  | {rmse_st_avg:.4f}   | {np.mean(lat_st):.2f}\n"
-        f"DCRNN      | {mae_dc_t1:.4f}  | {rmse_dc_t1:.4f}  | {mae_dc_avg:.4f}  | {rmse_dc_avg:.4f}   | {np.mean(lat_dc):.2f}\n"
-        f"{'='*95}\n"
+        f"{'='*115}\n📊 RELATÓRIO DE DESEMPENHO\n{'='*115}\n"
+        f"Modelo     | MAE T+1 | RMSE T+1 | MAPE T+1 | MAE (1h) | RMSE (1h) | MAPE (1h) | Latência (ms)\n"
+        f"-----------|---------|----------|----------|----------|-----------|-----------|---------------\n"
+        f"ST-GCN     | {mae_st_t1:.4f}  | {rmse_st_t1:.4f}  | {mape_st_t1:.2f}%  | {mae_st_avg:.4f}  | {rmse_st_avg:.4f}   | {mape_st_avg:.2f}%   | {np.mean(lat_st):.2f}\n"
+        f"DCRNN      | {mae_dc_t1:.4f}  | {rmse_dc_t1:.4f}  | {mape_dc_t1:.2f}%  | {mae_dc_avg:.4f}  | {rmse_dc_avg:.4f}   | {mape_dc_avg:.2f}%   | {np.mean(lat_dc):.2f}\n"
+        f"{'='*115}\n"
     )
     
     print(relatorio)
