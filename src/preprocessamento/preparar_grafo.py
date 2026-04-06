@@ -1,122 +1,143 @@
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import os
-import datetime
-import time
 import pandas as pd
-from src.modelos.modelo_STGCN import STGCN_TrafficModel
-from src.preprocessamento.dataLoader_Traffic import preparar_loaders
+import pickle
+import torch
+import numpy as np
+import os
+import h5py
+import scipy.sparse as sp
 
-def treinar_stgcn_multi_step():
-    # Configurações de Hardware e Ambiente
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+def calculate_random_walk_matrix(adj_mx):
+    """
+    Calcula a matriz de transição para a DCRNN (Random Walk).
+    P = D_out^-1 * W
+    """
+    # Conversão da matriz para formato Coordinate
+    adj_mx = sp.coo_matrix(adj_mx)
+    """
+    Cálculo do grau de saída (D_out) de cada sensor, ou seja, 
+    # a força de todos as estradas que saem daquela ponto
+    """
+    d = np.array(adj_mx.sum(1)).flatten()
+    # Cálculo do inverso da soma
+    d_inv = np.power(d, -1).flatten()
+    # Substituição de infinitos por zero (caso haja nós isolados), evitando a ocorrência de erros matemáticos
+    d_inv[np.isinf(d_inv)] = 0.
+    # Criação da matriz diagonal D^-1
+    d_mat_inv = sp.diags(d_inv)
+    # Produto escalar entre matriz diagonal invertida (D^-1) e a matriz de adjacência (W)
+    random_walk_mx = d_mat_inv.dot(adj_mx).tocoo()
+    return random_walk_mx
+
+def preparar_tudo():
+    # Raiz do projeto
     base_dir = r'C:\IC\Projeto_V2'
-    data_dir = os.path.join(base_dir, 'data', 'tratados')
-    log_dir = os.path.join(base_dir, 'data', 'logs')
-    model_dir = os.path.join(base_dir, 'src', 'modelos')
-    os.makedirs(log_dir, exist_ok=True)
-    os.makedirs(model_dir, exist_ok=True)
+    # Caminho do diretório de dados brutos
+    raw_dir = os.path.join(base_dir, 'data', 'brutos')
+    # Caminho do direótrio de dados processados
+    processed_dir = os.path.join(base_dir, 'data', 'tratados')
+    # Cria o diretório de dados processsados, caso não exista
+    os.makedirs(processed_dir, exist_ok=True)
 
-    # Identificação única do experimento para organização da IC
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = os.path.join(log_dir, f"treino_stgcn_{timestamp}.txt")
+    print("Passo 1: Extraindo velocidades...")
+    # Leitura do arquivo .h5
+    h5_path = os.path.join(raw_dir, 'METR-LA.h5')
+    with h5py.File(h5_path, 'r') as f:
+        # Extrai a matriz bruta de velocidades
+        data = f['df']['block0_values'][:]
+        # Coleta os nomes dos sensores a cada registro de velocidade
+        sensor_ids = [s.decode('utf-8') if isinstance(s, bytes) else str(s) for s in f['df']['axis0'][:]]
+        # Coleta os timestamps correspondentes a cada registro de velocidade
+        timestamps = f['df']['axis1'][:]
+        """
+        Conversão dos dados extraídos em estrutura de DataFrame.
+        1. Verifica se matriz original foi carregada com os sensores na linha
+        Caso tenha, aplica a transposição para inverter a matriz.
+        2. Criar cabeçalhos de colunas com os nomes dos sensores, facilitando a identificação e manipulação dos dados.
+        """
+        df_vel = pd.DataFrame(data.T if data.shape[0] == len(sensor_ids) else data, 
+                              columns=[f"Sensor_{sid}" for sid in sensor_ids])
+        # Insere a coluna de Timestamp como a primeira coluna do DataFrame, convertendo os valores para o formato datetime
+        df_vel.insert(0, 'Timestamp', pd.to_datetime(timestamps))
+        # Salva o DataFrame de velocidades em formato CSV, sem o índice numérico, facilitando leitura pelos modelos
+        df_vel.to_csv(os.path.join(processed_dir, 'METR-LA_series.csv'), index=False)
+
+    print("Passo 2: Processando matrizes para STGCN e DCRNN...")
+    # Leitura em binário do arquivo de adjacência, extraindo a matriz de adjacência original (não normalizada)
+    with open(os.path.join(raw_dir, 'adj_METR-LA.pkl'), 'rb') as f:
+        # O arquivo contém uma tupla com 3 elementos: (sensor_ids, sensor_id_to_index, adj_mx)
+        # OBS: latin1 é usada para garantir a compatibilidade com arquivos gerados em Python 2.x
+        adj_data = pickle.load(f, encoding='latin1')
+        # Como adj_data é uma tupla com 3 elementos, a matriz de adjacência original (não normalizada) é o terceiro elemento (índice 2)
+        adj_mx = adj_data[2]
+
+    # FORMATO STGCN
+    """
+    Conversão da matriz de pesos para precisão simples, 32 bits.
+    Substituição de valores NaN por zero
+    """
+    adj_stgcn = np.nan_to_num(adj_mx.astype(np.float32))
+    """
+    Procura todas as posições da matriz onde o valor é maior que zero, ou seja, 
+    onde existe uma conexão entre os sensores, retornando as coordenadas dessas posições.
+    (linhas e colunas)
+    """
+    rows, cols = np.where(adj_stgcn > 0)
+    """
+    Cria um tensor de arestas (edge_index) no formato [2, num_arestas], onde a primeira linha 
+    contém os índices dos nós de origem e a segunda linha contém os índices dos nós de destino.
+    """
+    edge_index = torch.tensor(np.array([rows, cols]), dtype=torch.long)
+    """
+    Extrai apenas os valores de peso das conexões identificadas anteriormente no tensor
+    """
+    edge_attr = torch.tensor(adj_stgcn[rows, cols], dtype=torch.float)
+
+    """
+    Salva os tensores de arestas e pesos no formato .pt, que é o formato nativo do PyTorch.
+    """
+    torch.save(edge_index, os.path.join(processed_dir, 'edge_index_stgcn.pt'))
+    torch.save(edge_attr, os.path.join(processed_dir, 'edge_attr_stgcn.pt'))
+
+    # FORMATO DCRNN (Dual Random Walk)
+    """
+    A DCRNN não utiliza apenas a vizinhança simples, mas sim um processo de difusão.
+    Ela precisa de dois sentidos: Direto (Forward) e Reverso (Backward).
+    """
+    adj_dcrnn_list = []
+
+    """
+    Matriz Forward (Fluxo Direto):
+    Representa a direção natural do tráfego. O comando abaixo calcula a matriz de 
+    probabilidade de transição (Random Walk) e a converte em um array denso do NumPy.
+    """
+    adj_dcrnn_list.append(calculate_random_walk_matrix(adj_stgcn).toarray())
+
+    """
+    Matriz Backward (Fluxo Reverso):
+    Fundamental para capturar o efeito de "represamento" ou influência de montante (upstream).
+    Ao transpor a matriz (adj_stgcn.T), invertemos o sentido das arestas para que o modelo
+    aprenda como um congestionamento à frente afeta os sensores situados atrás.
+    """
+    adj_dcrnn_list.append(calculate_random_walk_matrix(adj_stgcn.T).toarray())
     
-    def log_print(msg):
-        print(msg)
-        with open(log_file, "a", encoding='utf-8') as f:
-            f.write(msg + "\n")
+    """
+    Consolidação dos Dados:
+    O comando np.stack empilha as duas matrizes (Forward e Backward).
+    O resultado é transformado em um tensor do PyTorch com formato [2, Nós, Nós].
+    O tipo 'torch.float' (32 bits) é o padrão exigido para o processamento em GPU.
+    """
+    adj_dcrnn_tensor = torch.tensor(np.stack(adj_dcrnn_list), dtype=torch.float)
 
-    # 1. Hiperparâmetros (Horizonte de 12 passos = 60 minutos)
-    batch_size = 32
-    epochs = 50
-    lr = 0.001
-    
-    # Preparação dos dados: 1 hora de histórico para prever 1 hora à frente
-    train_loader, test_loader = preparar_loaders(batch_size=batch_size, window_size=12, horizon=12)
-    
-    # Instanciação da ST-GCN (Multi-step nativa)
-    model = STGCN_TrafficModel(num_features=5).to(device)
-    
-    # Carregamento do Grafo (Agora usando os pesos NORMALIZADOS SIMETRICAMENTE)
-    try:
-        edge_index = torch.load(os.path.join(data_dir, 'edge_index_stgcn.pt'), weights_only=True).to(device)
-        edge_attr = torch.load(os.path.join(data_dir, 'edge_attr_stgcn.pt'), weights_only=True).to(device)
-        log_print(f"✅ Grafo carregado com {edge_index.shape[1]} arestas normalizadas.")
-    except FileNotFoundError:
-        log_print("❌ Erro: Arquivos de grafo não encontrados. Certifique-se de executar o script de preparação do grafo primeiro.")
-        return
+    """
+    Persistência em Disco:
+    Salva o tensor final no diretório de dados tratados com a extensão .pt.
+    Isso permite que o modelo carregue a estrutura do grafo instantaneamente durante o treino.
+    """
+    torch.save(adj_dcrnn_tensor, os.path.join(processed_dir, 'adj_mx_dcrnn.pt'))
 
-    # Otimização e Critério de Perda
-    optimizer = optim.Adam(model.parameters(), lr=lr)
-    # MAE mascareado para ignorar sensores falhos (velocidade = 0)
-    mae_criterion = nn.L1Loss(reduction='none')
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
-
-    log_print(f"📊 [ST-GCN] Iniciando Treinamento (60 min)")
-    log_print(f"💻 GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'}")
-    
-    best_val_mae = float('inf')
-    history = []
-    start_train = time.time()
-
-    # 2. Loop de Treinamento
-    for epoch in range(epochs):
-        model.train()
-        train_loss = 0
-        
-        for x, y in train_loader:
-            x, y = x.to(device), y.to(device) # y shape: [Batch, 12, Nodes]
-            
-            optimizer.zero_grad()
-            # Predição simultânea de todos os 12 passos
-            output = model(x, edge_index, edge_weight=edge_attr) 
-            
-            # Cálculo da perda apenas onde os dados são válidos
-            mask = (y > 0).float()
-            loss = (mae_criterion(output, y) * mask).sum() / (mask.sum() + 1e-8)
-            
-            loss.backward()
-            optimizer.step()
-            train_loss += loss.item()
-
-        # 3. Validação (Conjunto de Teste)
-        model.eval()
-        val_mae = 0
-        with torch.no_grad():
-            for xv, yv in test_loader:
-                xv, yv = xv.to(device), yv.to(device)
-                pred = model(xv, edge_index, edge_weight=edge_attr)
-                
-                mask_v = (yv > 0).float()
-                v_mae = (mae_criterion(pred, yv) * mask_v).sum() / (mask_v.sum() + 1e-8)
-                val_mae += v_mae.item()
-
-        avg_train_mae = train_loss / len(train_loader)
-        avg_val_mae = val_mae / len(test_loader)
-        
-        # Ajuste dinâmico da taxa de aprendizado
-        scheduler.step(avg_val_mae)
-        
-        # Salvamento do Melhor Modelo (Checkpoint para avaliação final)
-        if avg_val_mae < best_val_mae:
-            best_val_mae = avg_val_mae
-            torch.save(model.state_dict(), os.path.join(model_dir, 'stgcn_model.pth'))
-            status = "⭐ Melhor Modelo!"
-        else:
-            status = ""
-
-        log_print(f"Ep [{epoch+1:02d}/{epochs}] | Train MAE: {avg_train_mae:.4f} | Val MAE: {avg_val_mae:.4f} {status}")
-        history.append({"epoch": epoch+1, "train_mae": avg_train_mae, "val_mae": avg_val_mae})
-
-    # Finalização e Salvamento do Histórico para Gráficos
-    total_time = str(datetime.timedelta(seconds=int(time.time() - start_train)))
-    log_print(f"\n🏆 Treino ST-GCN Finalizado em {total_time}")
-    
-    # Nome do CSV compatível com os scripts de avaliação automatizada
-    history_path = os.path.join(log_dir, f"history_stgcn_{timestamp}.csv")
-    pd.DataFrame(history).to_csv(history_path, index=False)
-    log_print(f"📄 Histórico salvo em: {history_path}")
+    print(f"Sucesso!")
+    print(f"STGCN: {edge_index.shape[1]} arestas salvas.")
+    print(f"DCRNN: Matriz de difusão {adj_dcrnn_tensor.shape} salva.")
 
 if __name__ == "__main__":
-    treinar_stgcn_multi_step()
+    preparar_tudo()

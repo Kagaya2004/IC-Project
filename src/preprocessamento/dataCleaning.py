@@ -2,69 +2,95 @@ import pandas as pd
 import numpy as np
 import os
 
-def clean_metr_la(df):
+# Função para realizar limpeza do dataset METR-LA
+def limpeza_dataset_metrla(df):
     """
-    Realiza a limpeza e tratamento da base METR-LA.
+    Verificar a existência de colunas do tipo 'TimeStamp' ou 'Data_Hora'.
     """
-    # 1. Garantir que o Timestamp seja o índice e esteja no formato correto
-    # Verificamos se 'Timestamp' ou 'Data_Hora' existe nas colunas
     col_tempo = 'Timestamp' if 'Timestamp' in df.columns else ('Data_Hora' if 'Data_Hora' in df.columns else None)
     
+    """
+    Caso existe uma coluna temporal, ela é convertida para o time 'datetime'
+    Além disso, ela é definida como índice da base, facilitando em operações posteriores,
+    como manipulação temporal e interpolação.
+    """
     if col_tempo:
         df[col_tempo] = pd.to_datetime(df[col_tempo])
         df = df.set_index(col_tempo)
     
-    # 2. Lidar com os Zeros (Sensores Falhos)
-    # Transformamos 0 em NaN temporariamente para que a interpolação funcione
+    """
+    No dataset METR-LA, a velocidade é 0km/h qunando ocorre alguma falha no sensor,
+    Assim, esses valores são substituídos por NaN para não ocorrer erros durante a interpolação,
+    considerando como um buraco a ser preenchido.
+    """
     df = df.replace(0, np.nan)
     
-    # Interpolação linear: Preenche os buracos baseando-se nos vizinhos (antes e depois)
-    # 
+    """
+    Aqui é realizada a interpolação linear para preenchimento dos buracos no dataset, 
+    indicados pelo valor NaN. Esse método utilizada os valores vizinhos (um antes e outro depois)
+    para estimar o valor faltante.
+    """
     df = df.interpolate(method='linear', axis=0)
     
-    # ffill (forward fill) e bfill (backward fill) para erros nas extremidades do arquivo
+    """
+    Aqui é realizado o tratamento quando os valores faltantes são o primeiro (backward fill)  
+    ou o último (forward fill) da série temporal. Assim o valor válido mais próximo é 
+    utilizado para preencher essas lacunas.
+    """
     df = df.ffill().bfill()
     
-    # 3. Converter para Float32 (Otimização de memória para a RTX 3050)
+    """
+    Como o Python usa float64 por padrão e visando reduzir consumo de VRAM pela metade da RTX3050
+    Os dados float são convertidos para float32, permitindo uma melhor utilização da capacidade 
+    de processamento da GPU.
+    """
     df = df.astype(np.float32)
     
-    # 4. Verificação final de sanidade
+    """
+    Verificação de segurança para a ocorrência de alguma falha na interpolação, excluindo tais linhas e notificando
+    a existência dessa falha 
+    """
     if df.isnull().values.any():
-        print("⚠️ Aviso: Ainda existem valores nulos após a limpeza!")
+        print("Falha na Interpolação: Existem valores nulos na base após o processo de limpeza.")
         df = df.dropna()
         
     return df
 
 def executar_limpeza_completa():
-    # Definição de caminhos
+    # Raiz do Projeto
     base_dir = r'C:\IC\Projeto_V2'
-    # Se o seu arquivo bruto for .h5, use pd.read_hdf. Se for .csv, use pd.read_csv.
-    input_path = os.path.join(base_dir, 'data', 'brutos', 'METR-LA.h5') 
+    # Caminhos do arquivo de entrada de dados, os dados brutos do dataset METR-LA
+    input_path = os.path.join(base_dir, 'data', 'brutos', 'METR-LA.h5')
+    # Caminho do arquivo de saída, onde a base após a limpeza e interpolação, será salvo e seu nome e formato
     output_path = os.path.join(base_dir, 'data', 'tratados', 'METR-LA_cleaned.csv')
 
     # Criar a pasta 'tratados' caso ela não exista
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-    print(f"📂 Carregando base de dados: {input_path}")
+    print(f"Carregando base de dados: {input_path}")
     
     try:
-        # Carregando o arquivo (Ajuste para read_csv se o seu bruto for CSV)
+        # Verifica se o formato do dataset é .h5 ou .csv antes de carregá-lo
         if input_path.endswith('.h5'):
             df_bruto = pd.read_hdf(input_path)
         else:
             df_bruto = pd.read_csv(input_path)
 
-        # 5. Chamada da função de limpeza
-        print("🧹 Iniciando processo de limpeza e interpolação...")
-        df_limpo = clean_metr_la(df_bruto)
+        print("Iniciando processo de limpeza e interpolação...")
+        # Chamada da função de limpeza e interpolação
+        df_limpo = limpeza_dataset_metrla(df_bruto)
 
-        # 6. Salvamento do novo arquivo
+        """
+        Salve o resultado do processo de DataCleaning em um arquivo .csv
+        O valor True do index garante a coluna temporal seja preservada no arquivo de saída,
+        mantendo a integridade da série temporal.
+        """
         df_limpo.to_csv(output_path, index=True)
-        print(f"✨ Sucesso! Base limpa salva em: {output_path}")
-        print(f"📊 Dimensões finais: {df_limpo.shape}")
+        print(f"Dataset limpa e salva em: {output_path}")
+        print(f"Dimensões finais do Dataset: {df_limpo.shape}")
 
     except Exception as e:
-        print(f"❌ Erro ao processar os dados: {e}")
+        print(f"Erro ao processar os dados: {e}")
 
 if __name__ == "__main__":
     executar_limpeza_completa()
