@@ -50,7 +50,7 @@ def executar_limpeza_completa():
     try:
         # Carregando o arquivo (Ajuste para read_csv se o seu bruto for CSV)
         if input_path.endswith('.h5'):
-            df_bruto = pd.read_hdf(input_path)
+            df_bruto = pd.read_hdf(input_path, key='df')
         else:
             df_bruto = pd.read_csv(input_path)
 

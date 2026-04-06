@@ -7,14 +7,14 @@ from torch.utils.data import Dataset, DataLoader
 class TrafficDataset(Dataset):
     def __init__(self, window_size=12, horizon=12):
         """
-        Dataset Universal para ST-GCN e DCRNN.
+        Dataset Universal para comparação entre ST-GCN e LSTM.
         window_size: quantos passos do passado olhamos (ex: 12 = 1 hora)
         horizon: quantos passos do futuro queremos prever (ex: 12 = 1 hora)
         """
         base_path = r'C:\IC\Projeto_V2\data\tratados'
         file_path = os.path.join(base_path, 'METR-LA_featured.csv')
         
-        print(f"⏳ A carregar base universal para comparação: {file_path}...")
+        print(f"⏳ Carregando base universal para comparação: {file_path}...")
         
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"❌ Erro: {file_path} não encontrado. Execute o pipeline de pré-processamento primeiro!")
@@ -57,7 +57,7 @@ class TrafficDataset(Dataset):
         x = self.data[idx : idx + self.window_size]
         
         # y: [Horizon, Nodes] -> Alvo (apenas a velocidade, índice 0)
-        # Importante: DCRNN precisa da sequência, STGCN pode pegar apenas y[0]
+        # Importante: Ambos LSTM e ST-GCN neste experimento focarão no primeiro passo (t+1)
         y = self.data[idx + self.window_size : idx + self.window_size + self.horizon, :, 0]
         
         return torch.tensor(x), torch.tensor(y)
@@ -67,12 +67,23 @@ def preparar_loaders(batch_size=32, window_size=12, horizon=12):
     
     dataset = TrafficDataset(window_size=window_size, horizon=horizon)
     
-    # Divisão fixa para garantir comparação justa (80% treino, 20% teste)
+    # --- Modificação: Split Cronológico ao invés de Random Split ---
+    # Em séries temporais, é fundamental que o treino ocorra no passado e o teste no futuro.
     train_size = int(0.8 * len(dataset))
-    test_ds_size = len(dataset) - train_size
-    train_ds, test_ds = torch.utils.data.random_split(dataset, [train_size, test_ds_size])
     
+    # Criamos índices sequenciais
+    indices = list(range(len(dataset)))
+    train_indices = indices[:train_size]
+    test_indices = indices[train_size:]
+    
+    # Usamos o Subset para separar os dados mantendo a ordem do tempo
+    train_ds = torch.utils.data.Subset(dataset, train_indices)
+    test_ds = torch.utils.data.Subset(dataset, test_indices)
+    
+    # O shuffle=True no treino é aceitável pois as janelas já contêm a sequência temporal interna (window_size)
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, pin_memory=True)
+    
+    # Teste NUNCA deve ser embaralhado para podermos plotar os gráficos de forma contínua depois
     test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, pin_memory=True)
     
     print(f"✨ Concluído! Treino: {len(train_loader)} batches | Teste: {len(test_loader)} batches.\n")
