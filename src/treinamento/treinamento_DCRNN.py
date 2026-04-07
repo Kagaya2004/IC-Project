@@ -9,50 +9,71 @@ from src.modelos.modelo_DCRNN import DCRNNModel
 from src.preprocessamento.dataLoader_Traffic import preparar_loaders
 
 def treinar_dcrnn():
+    # Definição do dispositivo (GPU se disponível, caso contrário CPU)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # Raiz do Projeto
     base_dir = r'C:\IC\Projeto_V2'
+    # Diretório dos dados tratados
     data_dir = os.path.join(base_dir, 'data', 'tratados')
+    # Diretório dos logs
     log_dir = os.path.join(base_dir, 'data', 'logs')
+    # Diretório dos modelos
     model_dir = os.path.join(base_dir, 'src', 'modelos')
-    
-    # Garante que as pastas existam
+    # Cria diretóios de logs e modelos, caso não existam
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(model_dir, exist_ok=True)
 
+    # # Identificação única do experimento para histórico dos logs
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file = os.path.join(log_dir, f"treino_dcrnn_{timestamp}.txt")
     
+    # Função auxiliar para imprimir mensagens no console e salvar no arquivo de log
     def log_print(msg):
         print(msg)
         with open(log_file, "a", encoding='utf-8') as f:
             f.write(msg + "\n")
 
-    # 1. Configurações de Paridade (Horizonte 12: 60 min)
-    # Com 207 sensores e 5 features, a DCRNN consome muita VRAM na RTX 3050.
-    # Se der 'Out of Memory', mude para 16.
-    batch_size = 32 
+    # Definição dos hiperparâmetros de treinamento
+    """
+    Batch size é o número de amostras que o modelo irá processar antes de atualizar 
+    os pesos. Ao invés de processar todos os registros, o modelo processa uma pequana
+    amostra, no caso, 32 amostras por vez.
+    """
+    batch_size = 32
+    """
+    Época se refere a passagem completa de todo conjunto de dados do treinamento.
+    """
     epochs = 50
+    """
+    Taxa de aprendizado define o tamanho dos passos que o modelo dá ao atualizar os pesos.
+    """
     lr = 0.001
     
+    """
+    Preparação dos dados:
+    O modelo STGCN irá processar os dados em uma janela de 60 minutos (12 passos de 5 minutos)
+    para prever os próximos 60 minutos (12 passos).
+    """
     train_loader, test_loader = preparar_loaders(batch_size=batch_size, window_size=12, horizon=12)
     
     # Carregamento das Matrizes de Difusão geradas no preparar_grafo.py
     try:
         adj_matrices = torch.load(os.path.join(data_dir, 'adj_mx_dcrnn.pt'), weights_only=True).to(device)
-        log_print(f"✅ Matrizes de Difusão DCRNN carregadas: {adj_matrices.shape}")
+        log_print(f"Matrizes de Difusão DCRNN carregadas: {adj_matrices.shape}")
     except Exception as e:
-        log_print(f"❌ Erro crítico: Matrizes DCRNN não encontradas. {e}")
+        log_print(f"Erro crítico: Matrizes DCRNN não encontradas. {e}")
         return
 
-    # O hidden_dim=64 mantém a paridade com os canais da ST-GCN
+    # O hidden_dim=64 mantém a paridade com os canais da STGCN
     model = DCRNNModel(adj_matrices=adj_matrices, in_channels=5, hidden_dim=64).to(device)
     
+    # Configuração do Otimizador, Critério de Perda e Scheduler
     optimizer = optim.Adam(model.parameters(), lr=lr)
     mae_criterion = nn.L1Loss(reduction='none')
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
 
-    log_print(f"🌊 [DCRNN] Iniciando Treinamento")
-    log_print(f"💻 GPU Detectada: {torch.cuda.get_device_name(0)}")
+    log_print(f"[DCRNN] Iniciando Treinamento")
+    log_print(f"GPU Detectada: {torch.cuda.get_device_name(0)}")
     
     best_val_mae = float('inf')
     history = []
@@ -61,44 +82,60 @@ def treinar_dcrnn():
     # 2. Loop de Treinamento
     for epoch in range(epochs):
         model.train()
+        # Inicializa a perda de treinamento
         train_loss = 0
         
         for x, y in train_loader:
+            # Move os dados para o dispositivo (GPU ou CPU)
             x, y = x.to(device), y.to(device) # y: [Batch, 12, 207]
-            
+            # Zera os gradientes acumulados
             optimizer.zero_grad()
-            # Predição completa de 12 passos
+            # Forward Pass: Processa as 12 etapas de entrada para prever as próximas 12 etapas
             output = model(x) 
             
-            # Masked MAE sobre todo o horizonte temporal
+            # Máscara para identificar dados válidos
             mask = (y > 0).float()
+            # Cálculo da perda apenas onde os dados são válidos
             loss = (mae_criterion(output, y) * mask).sum() / (mask.sum() + 1e-8)
             
+            # Backpropagation: Calcula os gradientes e atualiza os pesos do modelo
             loss.backward()
+            # Atualiza os pesos do modelo com base nos gradientes calculados
             optimizer.step()
+            # Acumula a perda de treinamento para calcular a média no final da época
             train_loss += loss.item()
 
-        # 3. Validação (Test Set)
+        # Validação (Conjunto de Teste)
+        # Inicia modo de avaliação
         model.eval()
+        # Inicializa o MAE de validação
         val_mae = 0
+        # Desativa o cálculo de gradientes para economizar memória e acelerar a validação
         with torch.no_grad():
             for xv, yv in test_loader:
+                # Move os dados de validação para o dispositivo
                 xv, yv = xv.to(device), yv.to(device)
+                # Realiza a previsão para os dados de validação
                 pred = model(xv)
-                
+                # Aplica máscara para identificar os dados válidos
                 mask_v = (yv > 0).float()
+                # Cálculo do MAE usando a máscara para considerar apenas os sensores válidos
                 v_mae = (mae_criterion(pred, yv) * mask_v).sum() / (mask_v.sum() + 1e-8)
+                # Acumula o MAE de validação para calcular a média no final da época
                 val_mae += v_mae.item()
 
+        # Cálculo da média do MAE para treinamento
         avg_train_mae = train_loss / len(train_loader)
+        # Cálculo da média do MAE para validação
         avg_val_mae = val_mae / len(test_loader)
+        # Ajuste dinâmico da taxa de aprendizado com base no MAE de validação
         scheduler.step(avg_val_mae)
         
         # Salvamento de Checkpoint
         if avg_val_mae < best_val_mae:
             best_val_mae = avg_val_mae
             torch.save(model.state_dict(), os.path.join(model_dir, 'dcrnn_model.pth'))
-            status = "⭐ Melhor Modelo!"
+            status = "Melhor Modelo!"
         else:
             status = ""
 
@@ -109,8 +146,8 @@ def treinar_dcrnn():
     total_time = str(datetime.timedelta(seconds=int(time.time() - start_train)))
     
     log_print("\n" + "="*50)
-    log_print(f"🏆 Treino DCRNN Finalizado em {total_time}")
-    log_print(f"📉 Melhor MAE no Teste (Horizonte 12): {best_val_mae:.4f}")
+    log_print(f"Treino DCRNN Finalizado em {total_time}")
+    log_print(f"Melhor MAE no Teste (Horizonte 12): {best_val_mae:.4f}")
     log_print("="*50)
 
     # Exportação para análise visual posterior
