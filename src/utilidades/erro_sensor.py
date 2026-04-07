@@ -9,18 +9,26 @@ from src.modelos.modelo_DCRNN import DCRNNModel
 from src.preprocessamento.dataLoader_Traffic import TrafficDataset, DataLoader
 
 def analise_espacial_completa():
+    # Define o dispositivo (GPU se disponível, caso contrário CPU)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # Raiz do projeto
     base_dir = r'C:\IC\Projeto_V2'
+    # Diretório de dados tratados
     data_dir = os.path.join(base_dir, 'data', 'tratados')
+    # Diretório de logs
     log_dir = os.path.join(base_dir, 'data', 'logs')
+    # Diretório de modelos
     model_dir = os.path.join(base_dir, 'src', 'modelos')
     os.makedirs(log_dir, exist_ok=True)
+
+    # Identificação única do experimento para histórico dos logs
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
+    # Dataset de Teste (Horizonte 12 para 60 min)
     dataset = TrafficDataset(window_size=12, horizon=12)
     test_loader = DataLoader(dataset, batch_size=32, shuffle=False)
 
-    print("🤖 Carregando modelos...")
+    print("Carregando modelos...")
     stgcn = STGCN_TrafficModel(num_features=5).to(device)
     stgcn.load_state_dict(torch.load(os.path.join(model_dir, 'stgcn_model.pth'), weights_only=True))
     stgcn.eval()
@@ -34,26 +42,39 @@ def analise_espacial_completa():
 
     mae_st_sum, mae_dc_sum, counts = np.zeros(207), np.zeros(207), np.zeros(207)
 
-    print("🚀 Processando erros por sensor...")
+    print("Processando erros por sensor...")
+    # Desativa o cálculo de gradientes para avaliação, economizando memória e tempo
     with torch.no_grad():
         for x, y in test_loader:
+            # Envia dados de entrada para o dispositivo (GPU ou CPU)
             x, y = x.to(device), y.to(device)
+            # Predições do STGCN
             out_st = stgcn(x, edge_index, edge_weight=edge_attr)
+            # Predições do DCRNN
             out_dc = dcrnn(x)
 
+            # Desnormalização para km/h
             y_kmh = (y * dataset.std) + dataset.mean
+            # Desnormalização das predições para km/h do STGCN
             p_st_kmh = (out_st * dataset.std) + dataset.mean
+            # Desnormalização das predições para km/h do DCRNN
             p_dc_kmh = (out_dc * dataset.std) + dataset.mean
+            # Máscara para considerar apenas os sensores ativos (velocidade > 0)
             mask = y_kmh > 0
             
+            # MAE acumulado por sensor do STGCN
             mae_st_sum += torch.sum(torch.abs(p_st_kmh - y_kmh) * mask, dim=(0, 1)).cpu().numpy()
+            # MAE acumulado por sensor do DCRNN
             mae_dc_sum += torch.sum(torch.abs(p_dc_kmh - y_kmh) * mask, dim=(0, 1)).cpu().numpy()
+            # Contagem de amostras válidas por sensor para média final
             counts += torch.sum(mask, dim=(0, 1)).cpu().numpy()
 
+    # MAE final por sensor do STGCN
     mae_st_final = mae_st_sum / (counts + 1e-8)
+    # MAE final por sensor do DCRNN
     mae_dc_final = mae_dc_sum / (counts + 1e-8)
 
-    # Gráfico 1: Boxplot Estatístico
+    # Gráfico Boxplot Estatístico
     plt.figure(figsize=(10, 6))
     plt.boxplot([mae_st_final, mae_dc_final], patch_artist=True, tick_labels=['ST-GCN', 'DCRNN'],
                 boxprops=dict(facecolor='#D3D3D3', color='black'),
@@ -63,7 +84,7 @@ def analise_espacial_completa():
     plt.grid(True, axis='y', linestyle='--', alpha=0.5)
     plt.savefig(os.path.join(log_dir, f"distribuicao_erro_boxplot_{timestamp}.png"), dpi=300)
 
-    # Gráfico 2: Scatter Plot Espacial
+    # Gráfico Scatter Espacial
     plt.figure(figsize=(12, 6))
     plt.scatter(range(207), mae_st_final, color='blue', alpha=0.6, s=20, label='ST-GCN')
     plt.scatter(range(207), mae_dc_final, color='red', alpha=0.6, s=20, label='DCRNN')
@@ -74,7 +95,7 @@ def analise_espacial_completa():
 
     df_res = pd.DataFrame({'sensor_id': range(207), 'mae_stgcn': mae_st_final, 'mae_dcrnn': mae_dc_final})
     df_res.to_csv(os.path.join(log_dir, f"erro_detalhado_sensores_{timestamp}.csv"), index=False)
-    print(f"✅ Análise espacial concluída.")
+    print(f"Análise espacial concluída.")
 
 if __name__ == "__main__":
     analise_espacial_completa()
