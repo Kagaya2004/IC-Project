@@ -5,7 +5,7 @@ import os
 import datetime
 import pandas as pd
 from src.modelos.modelo_STGCN import STGCN_TrafficModel
-# from src.modelos.modelo_DCRNN import DCRNNModel
+from src.modelos.modelo_DCRNN import DCRNNModel
 from src.modelos.modelo_LSTM import LSTM_TrafficModel
 from src.preprocessamento.dataLoader_Traffic import TrafficDataset, DataLoader
 
@@ -37,19 +37,22 @@ def analise_espacial_completa():
     edge_index = torch.load(os.path.join(data_dir, 'edge_index_stgcn.pt'), weights_only=True).to(device)
     edge_attr = torch.load(os.path.join(data_dir, 'edge_attr_stgcn.pt'), weights_only=True).to(device)
 
-    # DCRNN (Comentado)
-    # adj_dc = torch.load(os.path.join(data_dir, 'adj_mx_dcrnn.pt'), weights_only=True).to(device)
-    # dcrnn = DCRNNModel(adj_matrices=adj_dc, in_channels=5).to(device)
-    # dcrnn.load_state_dict(torch.load(os.path.join(model_dir, 'dcrnn_model.pth'), weights_only=True))
-    # dcrnn.eval()
+    # DCRNN
+    adj_dc = torch.load(os.path.join(data_dir, 'adj_mx_dcrnn.pt'), weights_only=True).to(device)
+    dcrnn = DCRNNModel(adj_matrices=adj_dc, in_channels=5).to(device)
+    dcrnn.load_state_dict(torch.load(os.path.join(model_dir, 'dcrnn_model.pth'), weights_only=True))
+    dcrnn.eval()
 
-    # LSTM (Adicionado)
+    # LSTM
     lstm = LSTM_TrafficModel(num_features=5).to(device)
     lstm.load_state_dict(torch.load(os.path.join(model_dir, 'lstm_model.pth'), weights_only=True))
     lstm.eval()
 
-    # Variáveis de acúmulo alteradas (mae_dc_sum -> mae_ls_sum)
-    mae_st_sum, mae_ls_sum, counts = np.zeros(207), np.zeros(207), np.zeros(207)
+    # Inicialização dos acumuladores de erro e contagem por sensor
+    mae_st_sum = np.zeros(207)
+    mae_dc_sum = np.zeros(207)
+    mae_ls_sum = np.zeros(207)
+    counts = np.zeros(207)
 
     print("Processando erros por sensor...")
     # Desativa o cálculo de gradientes para avaliação, economizando memória e tempo
@@ -61,8 +64,8 @@ def analise_espacial_completa():
             # Predições do STGCN
             out_st = stgcn(x, edge_index, edge_weight=edge_attr)
             
-            # Predições do DCRNN (Comentado)
-            # out_dc = dcrnn(x)
+            # Predições do DCRNN
+            out_dc = dcrnn(x)
 
             # Predições do LSTM (Adicionado com os ajustes de shape)
             b, t, n, f = x.shape
@@ -74,11 +77,9 @@ def analise_espacial_completa():
             y_kmh = (y * dataset.std) + dataset.mean
             # Desnormalização das predições para km/h do STGCN
             p_st_kmh = (out_st * dataset.std) + dataset.mean
-            
-            # Desnormalização das predições para km/h do DCRNN (Comentado)
-            # p_dc_kmh = (out_dc * dataset.std) + dataset.mean
-            
-            # Desnormalização das predições para km/h do LSTM (Adicionado)
+            # Desnormalização das predições para km/h do DCRNN
+            p_dc_kmh = (out_dc * dataset.std) + dataset.mean
+            # Desnormalização das predições para km/h do LSTM
             p_ls_kmh = (out_ls * dataset.std) + dataset.mean
             
             # Máscara para considerar apenas os sensores ativos (velocidade > 0)
@@ -86,55 +87,48 @@ def analise_espacial_completa():
             
             # MAE acumulado por sensor do STGCN
             mae_st_sum += torch.sum(torch.abs(p_st_kmh - y_kmh) * mask, dim=(0, 1)).cpu().numpy()
-            
-            # MAE acumulado por sensor do DCRNN (Comentado)
-            # mae_dc_sum += torch.sum(torch.abs(p_dc_kmh - y_kmh) * mask, dim=(0, 1)).cpu().numpy()
-            
-            # MAE acumulado por sensor do LSTM (Adicionado)
+            # MAE acumulado por sensor do DCRNN
+            mae_dc_sum += torch.sum(torch.abs(p_dc_kmh - y_kmh) * mask, dim=(0, 1)).cpu().numpy()
+            # MAE acumulado por sensor do LSTM
             mae_ls_sum += torch.sum(torch.abs(p_ls_kmh - y_kmh) * mask, dim=(0, 1)).cpu().numpy()
             
             # Contagem de amostras válidas por sensor para média final
             counts += torch.sum(mask, dim=(0, 1)).cpu().numpy()
 
-    # MAE final por sensor do STGCN
+    # Cálculo do MAE final por sensor para cada modelo
     mae_st_final = mae_st_sum / (counts + 1e-8)
-    
-    # MAE final por sensor do DCRNN (Comentado)
-    # mae_dc_final = mae_dc_sum / (counts + 1e-8)
-    
-    # MAE final por sensor do LSTM (Adicionado)
+    mae_dc_final = mae_dc_sum / (counts + 1e-8)
     mae_ls_final = mae_ls_sum / (counts + 1e-8)
 
     # Gráfico Boxplot Estatístico
     plt.figure(figsize=(10, 6))
-    # Atualizado para ST-GCN vs LSTM
-    plt.boxplot([mae_st_final, mae_ls_final], patch_artist=True, tick_labels=['ST-GCN', 'LSTM'],
+    plt.boxplot([mae_st_final, mae_dc_final, mae_ls_final], patch_artist=True, tick_labels=['ST-GCN', 'DCRNN', 'LSTM'],
                 boxprops=dict(facecolor='#D3D3D3', color='black'),
                 medianprops=dict(color='red', linewidth=2))
     plt.title('Análise Estatística da Dispersão do Erro MAE entre os Sensores por Modelo')
     plt.ylabel('MAE Médio (km/h)')
     plt.grid(True, axis='y', linestyle='--', alpha=0.5)
     plt.savefig(os.path.join(log_dir, f"distribuicao_erro_boxplot_{timestamp}.png"), dpi=300)
-    plt.show() # Adicionado para exibir na tela
+    plt.show()
 
     # Gráfico Scatter Espacial
     plt.figure(figsize=(12, 6))
     plt.scatter(range(207), mae_st_final, color='blue', alpha=0.6, s=20, label='ST-GCN')
-    
-    # Comentado DCRNN
-    # plt.scatter(range(207), mae_dc_final, color='red', alpha=0.6, s=20, label='DCRNN')
-    
-    # Adicionado LSTM (em verde)
-    plt.scatter(range(207), mae_ls_final, color='green', alpha=0.6, s=20, label='LSTM')
+    plt.scatter(range(207), mae_dc_final, color='red', alpha=0.6, s=20, label='DCRNN')
+    plt.scatter(range(207), mae_ls_final, color='green', alpha=0.6, s=20, label='LSTM (Adicionado)')
     
     plt.title('Comparativo do Erro MAE Individual entre os 207 Sensores por Modelo')
     plt.xlabel('Índice do Sensor'); plt.ylabel('MAE Médio (km/h)'); plt.legend()
     plt.grid(True, alpha=0.2)
     plt.savefig(os.path.join(log_dir, f"distribuicao_espacial_scatter_{timestamp}.png"), dpi=300)
-    plt.show() # Adicionado para exibir na tela
+    plt.show()
 
-    # Salvando CSV (Atualizado para LSTM)
-    df_res = pd.DataFrame({'sensor_id': range(207), 'mae_stgcn': mae_st_final, 'mae_lstm': mae_ls_final})
+    df_res = pd.DataFrame({
+        'sensor_id': range(207), 
+        'mae_stgcn': mae_st_final, 
+        'mae_dcrnn': mae_dc_final,
+        'mae_lstm': mae_ls_final
+    })
     df_res.to_csv(os.path.join(log_dir, f"erro_detalhado_sensores_{timestamp}.csv"), index=False)
     print(f"Análise espacial concluída.")
 
