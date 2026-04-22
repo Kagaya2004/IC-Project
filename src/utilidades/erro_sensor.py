@@ -109,7 +109,6 @@ def analise_espacial_completa():
     plt.ylabel('MAE Médio (km/h)')
     plt.grid(True, axis='y', linestyle='--', alpha=0.5)
     plt.savefig(os.path.join(log_dir, f"distribuicao_erro_boxplot_{timestamp}.png"), dpi=300)
-    plt.show()
 
     # Gráfico Scatter Espacial
     plt.figure(figsize=(12, 6))
@@ -121,7 +120,6 @@ def analise_espacial_completa():
     plt.xlabel('Índice do Sensor'); plt.ylabel('MAE Médio (km/h)'); plt.legend()
     plt.grid(True, alpha=0.2)
     plt.savefig(os.path.join(log_dir, f"distribuicao_espacial_scatter_{timestamp}.png"), dpi=300)
-    plt.show()
 
     df_res = pd.DataFrame({
         'sensor_id': range(207), 
