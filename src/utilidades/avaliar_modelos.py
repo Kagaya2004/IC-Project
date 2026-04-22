@@ -21,7 +21,7 @@ def buscar_ultimo_log(log_dir, prefixo):
     return max(arquivos, key=os.path.getctime) if arquivos else None
 
 def gerar_curva_aprendizado(log_dir, timestamp):
-    print("Gerando curva de aprendizado comparativa (ST-GCN vs DCRNN vs LSTM)...")
+    print("Gerando curva de aprendizado comparativa (STGCN vs DCRNN vs LSTM)...")
     # Busca os arquivos de log mais recentes para cada modelo
     file_st = buscar_ultimo_log(log_dir, 'history_stgcn')
     file_dc = buscar_ultimo_log(log_dir, 'history_dcrnn')
@@ -33,7 +33,7 @@ def gerar_curva_aprendizado(log_dir, timestamp):
     # Plotagem das curvas de validação
     if file_st:
         df_st = pd.read_csv(file_st)
-        plt.plot(df_st['epoch'], df_st['val_mae'], color='blue', linewidth=2, label='ST-GCN')
+        plt.plot(df_st['epoch'], df_st['val_mae'], color='blue', linewidth=2, label='STGCN')
     if file_dc:
         df_dc = pd.read_csv(file_dc)
         plt.plot(df_dc['epoch'], df_dc['val_mae'], color='red', linewidth=2, label='DCRNN')
@@ -43,7 +43,7 @@ def gerar_curva_aprendizado(log_dir, timestamp):
         plt.plot(df_ls['epoch'], df_ls['val_mae'], color='green', linewidth=2, label='LSTM')
     """
         
-    plt.title('Análise de Convergência e Estabilidade do Treinamento (ST-GCN vs. DCRNN)')
+    plt.title('Análise de Convergência e Estabilidade do Treinamento (STGCN vs. DCRNN)')
     plt.xlabel('Época'); plt.ylabel('MAE (km/h)'); plt.legend(frameon=False)
     plt.grid(True, linestyle=':', alpha=0.6)
     plt.savefig(os.path.join(log_dir, f"curva_aprendizado_{timestamp}.png"), dpi=300)
@@ -96,7 +96,7 @@ def avaliar_comparativo():
     y_true, y_st, y_dc, y_ls = [], [], [], []
     lat_st, lat_dc, lat_ls = [], [], []
 
-    print(f"🚀 Avaliando modelos em {device}...")
+    print(f"Avaliando modelos em {device}...")
     with torch.no_grad():
         for i, (x, y) in enumerate(test_loader):
             if i > 500: break 
@@ -158,7 +158,7 @@ def avaliar_comparativo():
 
     # 5. Relatório Científico Final
     relatorio = (
-        f"{'='*125}\n📊 RELATÓRIO COMPARATIVO TRIPLO: ST-GCN vs DCRNN vs LSTM (60 MIN)\n{'='*125}\n"
+        f"{'='*125}\nRELATÓRIO COMPARATIVO TRIPLO: STGCN vs DCRNN vs LSTM (60 MIN)\n{'='*125}\n"
         f"Modelo     | MAE T+1 | RMSE T+1 | MAPE T+1 | MAE (1h) | RMSE (1h) | MAPE (1h) | Latência (ms)\n"
         f"-----------|---------|----------|----------|----------|-----------|-----------|---------------\n"
     )
@@ -172,7 +172,7 @@ def avaliar_comparativo():
     # 6. Plotagem de Predição (Sensor 0)
     plt.figure(figsize=(15, 6))
     plt.plot(true_kmh[:150, 0, 0], label='Real (Ground Truth)', color='black', linewidth=2)
-    plt.plot(st_kmh[:150, 0, 0], label='ST-GCN', color='blue', linestyle='--')
+    plt.plot(st_kmh[:150, 0, 0], label='STGCN', color='blue', linestyle='--')
     plt.plot(dc_kmh[:150, 0, 0], label='DCRNN', color='red', linestyle=':')
     # plt.plot(ls_kmh[:150, 0, 0], label='LSTM', color='green', linestyle='-.')
     plt.title('Comparativo Temporal: Velocidade Real vs. Predita (Sensor 0)')

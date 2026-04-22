@@ -76,7 +76,7 @@ def analise_espacial_completa():
 
     # Gráfico Boxplot Estatístico
     plt.figure(figsize=(10, 6))
-    plt.boxplot([mae_st_final, mae_dc_final], patch_artist=True, tick_labels=['ST-GCN', 'DCRNN'],
+    plt.boxplot([mae_st_final, mae_dc_final], patch_artist=True, tick_labels=['STGCN', 'DCRNN'],
                 boxprops=dict(facecolor='#D3D3D3', color='black'),
                 medianprops=dict(color='red', linewidth=2))
     plt.title('Análise Estatística da Dispersão do Erro MAE entre os Sensores por Modelo')
@@ -86,7 +86,7 @@ def analise_espacial_completa():
 
     # Gráfico Scatter Espacial
     plt.figure(figsize=(12, 6))
-    plt.scatter(range(207), mae_st_final, color='blue', alpha=0.6, s=20, label='ST-GCN')
+    plt.scatter(range(207), mae_st_final, color='blue', alpha=0.6, s=20, label='STGCN')
     plt.scatter(range(207), mae_dc_final, color='red', alpha=0.6, s=20, label='DCRNN')
     plt.title('Comparativo do Erro MAE Individual entre os 207 Sensores por Modelo')
     plt.xlabel('Índice do Sensor'); plt.ylabel('MAE Médio (km/h)'); plt.legend()

@@ -77,7 +77,7 @@ def analise_horizonte_completo():
     minutos = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60]
     plt.figure(figsize=(10, 6))
     
-    # Estilo usado anteriormente: DCRNN (Red/Square), ST-GCN (Blue/Circle)
+    # Estilização dos gráficos
     plt.plot(minutos, [np.mean(s) for s in mae_per_step_dc], marker='s', label='DCRNN', color='#d62728', linewidth=2)
     plt.plot(minutos, [np.mean(s) for s in mae_per_step_st], marker='o', label='ST-GCN', color='#1f77b4', linewidth=2)
     
