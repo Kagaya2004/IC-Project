@@ -1,86 +1,114 @@
-import torch
-import pandas as pd
-import numpy as np
 import os
-from torch.utils.data import Dataset, DataLoader
+import numpy as np
+import pandas as pd
+import torch
+from torch.utils.data import DataLoader, Dataset
+
 
 class TrafficDataset(Dataset):
-    def __init__(self, window_size=12, horizon=12):
-        # Raiz de projeto
-        base_path = r'C:\IC\Projeto_V2\data\tratados'
-        # Caminho do arquivo final após a aplicação da Engenharia de Atriibutos/Features Engineering
-        file_path = os.path.join(base_path, 'METR-LA_featured.csv')
-        
-        print(f"A carregar base universal para comparação: {file_path}...")
-        
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"Erro: {file_path} não encontrado. Execute o pré-processamento primeiro!")
 
-        # Carrega o dataset com a coluna de timestamp como índice
-        df = pd.read_csv(file_path, index_col=0)
-        
-        """
-        Separação de Velocidades e Atributos Temporais:
-        Identifica as colunas de velocidades e as colunas de atributos temmporais (hora e dia da semana)
-        Converte tudo em matrizes NumPy do tipo float32, otimizando processamento
-        """
-        self.time_features_cols = ['hour_sin', 'hour_cos', 'dow_sin', 'dow_cos']
-        self.speed_cols = [c for c in df.columns if c not in self.time_features_cols]
-        v_data = df[self.speed_cols].values.astype(np.float32)
-        t_data = df[self.time_features_cols].values.astype(np.float32)
+  def __init__(
+      self,
+      data_array,
+      window_size=12,
+      horizon=12,
+  ):
+    # Recebe diretamente a matriz já processada e normalizada
+    self.data = data_array
+    self.window_size = window_size
+    self.horizon = horizon
 
-        """
-        Normalização Z-Score (Salva para desnormalizar no avaliar_modelo.py):
-        Centraliza as velocidades na média 0 com desvio padrão 1
-        """
-        self.mean = v_data.mean()
-        self.std = v_data.std()
-        v_norm = (v_data - self.mean) / (self.std + 1e-8)
+  def __len__(self):
+    return len(self.data) - self.window_size - self.horizon + 1
 
-        # Coleta a quantidade de sensores (nós) da matriz normalizada
-        num_nodes = v_norm.shape[1]
-        # Expande a dimensão de features para incluir a velocidade normalizada como o primeiro atributo de cada nó
-        v_norm = np.expand_dims(v_norm, axis=-1) # [T, N, 1]
-        
-        # Expandir atributos temporais para cada nó, permitindo que cada sensor tenha acesso às informações de hora e dia da semana, essenciais para a previsão
-        t_feats_expanded = np.tile(np.expand_dims(t_data, axis=1), (1, num_nodes, 1)) # [T, N, 4]
-        
-        # Concatena a Velocidade + 4 Features Temporais, formando um novo tensor com 5 atributos temporais
-        self.data = np.concatenate([v_norm, t_feats_expanded], axis=-1).astype(np.float32)
-        
-        # Define os parâmetros de janela e horizonte para a construção das sequências de entrada e saída do modelo
-        self.window_size = window_size
-        self.horizon = horizon
+  def __getitem__(self, idx):
+    # X: [Window_Size, Nodes, Features] -> Entrada do modelo
+    x = self.data[idx : idx + self.window_size]
 
-        print(f"Processamento concluído: {self.data.shape[0]} timesteps x {num_nodes} sensores.")
+    # y: [Horizon, Nodes] -> Alvo (apenas a velocidade, índice 0)
+    y = self.data[
+        idx + self.window_size : idx + self.window_size + self.horizon, :, 0
+    ]
 
-    def __len__(self):
-        # Garantimos que haja espaço para a janela de entrada E a de saída (horizonte)
-        return len(self.data) - self.window_size - self.horizon
+    return torch.tensor(x, dtype=torch.float32), torch.tensor(
+        y, dtype=torch.float32
+    )
 
-    def __getitem__(self, idx):
-        # X: [Window_Size, Nodes, Features] -> Entrada do modelo
-        x = self.data[idx : idx + self.window_size]
-        
-        # y: [Horizon, Nodes] -> Alvo (apenas a velocidade, índice 0)
-        # Importante: DCRNN precisa da sequência, STGCN pode pegar apenas y[0]
-        y = self.data[idx + self.window_size : idx + self.window_size + self.horizon, :, 0]
-        
-        return torch.tensor(x), torch.tensor(y)
 
-def preparar_loaders(batch_size=32, window_size=12, horizon=12):
-    print(f"\nPreparando DataLoaders (Janela: {window_size}, Horizonte: {horizon})...")
-    
-    dataset = TrafficDataset(window_size=window_size, horizon=horizon)
-    
-    # Divisão fixa para garantir comparação justa (80% treino, 20% teste)
-    train_size = int(0.8 * len(dataset))
-    test_ds_size = len(dataset) - train_size
-    train_ds, test_ds = torch.utils.data.random_split(dataset, [train_size, test_ds_size])
-    
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, pin_memory=True)
-    test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, pin_memory=True)
-    
-    print(f"Concluído! Treino: {len(train_loader)} batches | Teste: {len(test_loader)} batches.\n")
-    
-    return train_loader, test_loader
+def preparar_loaders(
+    batch_size=32,
+    window_size=12,
+    horizon=12,
+    train_ratio=0.8,
+):
+  base_path = r'C:\IC\Projeto_V2\data\tratados'
+  file_path = os.path.join(base_path, 'METR-LA_featured.csv')
+
+  print(f'Carregando base: {file_path}...')
+  if not os.path.exists(file_path):
+    raise FileNotFoundError(f'Erro: {file_path} não encontrado.')
+
+  df = pd.read_csv(file_path, index_col=0)
+
+  time_features_cols = ['hour_sin', 'hour_cos', 'dow_sin', 'dow_cos']
+  speed_cols = [c for c in df.columns if c not in time_features_cols]
+
+  v_raw = df[speed_cols].values.astype(np.float32)
+  t_raw = df[time_features_cols].values.astype(np.float32)
+
+  num_timesteps, num_nodes = v_raw.shape
+
+  # 1. Ponto de corte cronológico (ex: 80% inicial para treino)
+  split_idx = int(num_timesteps * train_ratio)
+
+  v_train_raw = v_raw[:split_idx]
+  v_test_raw = v_raw[split_idx:]
+
+  t_train = t_raw[:split_idx]
+  t_test = t_raw[split_idx:]
+
+  # 2. Normalização calculada EXCLUSIVAMENTE nos dados de treino
+  train_mean = v_train_raw.mean()
+  train_std = v_train_raw.std()
+
+  v_train_norm = (v_train_raw - train_mean) / (train_std + 1e-8)
+  v_test_norm = (v_test_raw - train_mean) / (train_std + 1e-8)
+
+  # Salve train_mean e train_std para desnormalizar as predições na avaliação:
+  # np.save('scaler_params.npy', {'mean': train_mean, 'std': train_std})
+
+  # 3. Montagem das dimensões [T, N, F] para Treino
+  v_train_norm = np.expand_dims(v_train_norm, axis=-1)
+  t_train_exp = np.tile(np.expand_dims(t_train, axis=1), (1, num_nodes, 1))
+  data_train = np.concatenate([v_train_norm, t_train_exp], axis=-1).astype(
+      np.float32
+  )
+
+  # 4. Montagem das dimensões [T, N, F] para Teste
+  v_test_norm = np.expand_dims(v_test_norm, axis=-1)
+  t_test_exp = np.tile(np.expand_dims(t_test, axis=1), (1, num_nodes, 1))
+  data_test = np.concatenate([v_test_norm, t_test_exp], axis=-1).astype(
+      np.float32
+  )
+
+  # Instanciação dos datasets sequenciais
+  train_ds = TrafficDataset(data_train, window_size, horizon)
+  test_ds = TrafficDataset(data_test, window_size, horizon)
+
+  # Atenção: no treino podemos embaralhar a ordem dos batches (shuffle=True),
+  # pois cada batch contém janelas que só olham para o próprio passado de treino.
+  train_loader = DataLoader(
+      train_ds, batch_size=batch_size, shuffle=True, pin_memory=True
+  )
+  test_loader = DataLoader(
+      test_ds, batch_size=batch_size, shuffle=False, pin_memory=True
+  )
+
+  print(f'Divisão temporal realizada com sucesso!')
+  print(f'Média de treino: {train_mean:.4f} | Desvio de treino: {train_std:.4f}')
+  print(
+      f'Treino: {len(train_ds)} amostras ({len(train_loader)} batches) | Teste:'
+      f' {len(test_ds)} amostras ({len(test_loader)} batches)\n'
+  )
+
+  return train_loader, test_loader, train_mean, train_std
