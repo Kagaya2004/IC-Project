@@ -75,9 +75,14 @@ def preparar_loaders(batch_size=32, window_size=12, horizon=12):
     
     # Divisão fixa para garantir comparação justa (80% treino, 20% teste)
     train_size = int(0.8 * len(dataset))
-    test_ds_size = len(dataset) - train_size
-    train_ds, test_ds = torch.utils.data.random_split(dataset, [train_size, test_ds_size])
     
+    # Substituição do random_split pelo Subset linear
+    # Garante que o modelo treine estritamente com o passado e teste com o futuro
+    train_ds = torch.utils.data.Subset(dataset, range(0, train_size))
+    test_ds = torch.utils.data.Subset(dataset, range(train_size, len(dataset)))
+    
+    # O shuffle=True no treino é mantido para embaralhar apenas os lotes dentro do 
+    # período de passado isolado, o que ajuda na convergência sem causar vazamento.
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, pin_memory=True)
     test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, pin_memory=True)
     
