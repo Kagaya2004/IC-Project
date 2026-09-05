@@ -8,10 +8,10 @@ import matplotlib.pyplot as plt
 import torch
 
 # Importações das Arquiteturas Refatoradas (Gui)
-from src.modelos.modelo_STGCN_Gui import STGCN_TrafficModel
-from src.modelos.modelo_DCRNN_Gui import DCRNNModel
-from src.modelos.modelo_LSTM_Gui import LSTM_TrafficModel
-from src.preprocessamento.dataLoader_Traffic_Gui import preparar_loaders
+from src.modelos.modelo_STGCN import STGCN_TrafficModel
+from src.modelos.modelo_DCRNN import DCRNNModel
+from src.modelos.modelo_LSTM import LSTM_TrafficModel
+from src.preprocessamento.dataLoader_Traffic import preparar_loaders
 
 def buscar_ultimo_log(log_dir, prefixo):
     padrao = os.path.join(log_dir, f"{prefixo}*.csv")
