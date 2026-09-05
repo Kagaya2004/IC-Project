@@ -1,18 +1,21 @@
+import os
+import time
+import datetime
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import os
-import datetime
-import time
-import pandas as pd
+
 from src.modelos.modelo_LSTM import LSTM_TrafficModel
 from src.preprocessamento.dataLoader_Traffic import preparar_loaders
 
 def treinar_lstm():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     base_dir = r'C:\IC\Projeto_V2'
+    data_dir = os.path.join(base_dir, 'data', 'tratados')
     log_dir = os.path.join(base_dir, 'data', 'logs')
     model_dir = os.path.join(base_dir, 'src', 'modelos')
+
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(model_dir, exist_ok=True)
 
@@ -24,100 +27,132 @@ def treinar_lstm():
         with open(log_file, "a", encoding='utf-8') as f:
             f.write(msg + "\n")
 
-    # 1. Configurações de Paridade (Horizonte 12: 60 min)
     batch_size = 32
     epochs = 50
     lr = 0.001
-    
-    # Loader universal: Entrada 12 passos, Saída 12 passos
-    train_loader, test_loader = preparar_loaders(batch_size=batch_size, window_size=12, horizon=12)
-    
-    # Instancia o modelo (Certifique-se de que a saída na classe é 12!)
-    model = LSTM_TrafficModel(num_features=5).to(device)
-    
+
+    # 1. Carregamento dos dados sem data leakage (desempacotando os 4 retornos)
+    train_loader, test_loader, train_mean, train_std = preparar_loaders(
+        batch_size=batch_size, window_size=12, horizon=12
+    )
+
+    # Persistência dos parâmetros de normalização
+    scaler_path = os.path.join(data_dir, 'scaler_params.pt')
+    torch.save({'mean': float(train_mean), 'std': float(train_std)}, scaler_path)
+    log_print(f"Scaler salvo em {scaler_path} (Média: {train_mean:.4f}, Desvio: {train_std:.4f})")
+
+    # Limiar para ignorar dados nulos no domínio normalizado
+    zero_threshold = -train_mean / (train_std + 1e-8)
+
+    # 2. Instanciação do Modelo LSTM
+    model = LSTM_TrafficModel(num_features=5, hidden_dim=64, num_layers=2, output_dim=12).to(device)
     optimizer = optim.Adam(model.parameters(), lr=lr)
     mae_criterion = nn.L1Loss(reduction='none')
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
 
-    log_print(f"📈 [LSTM MULTI-STEP] Iniciando Treinamento")
-    log_print(f"💻 Dispositivo: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'}")
-    
+    log_print(f"GPU Detectada: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'}")
+
+    # Caminhos para salvamento isolado
+    caminho_pesos_salvar = os.path.join(model_dir, 'lstm_model.pth')
+    caminho_checkpoint = os.path.join(model_dir, 'lstm_checkpoint.pth')
+
+    start_epoch = 0
     best_val_mae = float('inf')
     history = []
+
+    # 3. LÓGICA DE RETOMADA (FULL CHECKPOINTING)
+    if os.path.exists(caminho_checkpoint):
+        log_print(f"\n🔄 ARQUIVO DE CHECKPOINT DETECTADO!")
+        log_print("Restaurando estado de execução da LSTM...")
+        checkpoint = torch.load(caminho_checkpoint, map_location=device, weights_only=False)
+        
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        start_epoch = checkpoint['epoch'] + 1
+        best_val_mae = checkpoint['best_val_mae']
+        history = checkpoint.get('history', [])
+        
+        log_print(f"-> Treinamento retomado a partir da Época {start_epoch+1}.")
+        log_print(f"-> Melhor MAE anterior: {best_val_mae:.4f}\n")
+    else:
+        log_print("[LSTM] Iniciando Treinamento do zero...")
+
     start_train = time.time()
 
-    # 2. Loop de Treinamento
-    for epoch in range(epochs):
-        model.train()
-        train_loss = 0
-        
-        for x, y in train_loader:
-            x, y = x.to(device), y.to(device) # y: [Batch, 12, 207]
+    # 4. Loop de Treinamento Seguro
+    try:
+        for epoch in range(start_epoch, epochs):
+            model.train()
+            train_loss = 0.0
             
-            # --- Ajuste de Shape para LSTM ---
-            batch_curr, seq_len, num_nodes, num_feats = x.shape
-            
-            # x_lstm: [B*207, 12, 5] | target_lstm: [B*207, 12]
-            x_lstm = x.permute(0, 2, 1, 3).reshape(-1, seq_len, num_feats)
-            target_lstm = y.permute(0, 2, 1).reshape(-1, 12)
-
-            optimizer.zero_grad()
-            output = model(x_lstm) # Agora o modelo deve retornar [B*207, 12]
-            
-            # Garantimos que o output não tenha dimensões extras indesejadas
-            if output.dim() == 1 and target_lstm.dim() == 2:
-                # Caso o modelo ainda retorne apenas 1 valor por sensor, este erro persistirá.
-                # O reshape abaixo é uma proteção, mas o ideal é a mudança no modelo_LSTM.py
-                output = output.view(target_lstm.shape[0], -1)
-
-            # Masked Loss sobre os 12 passos temporais
-            mask = (target_lstm > 0).float()
-            # O mae_criterion retornará [B*207, 12], multiplicamos pela máscara
-            loss_raw = mae_criterion(output, target_lstm)
-            loss = (loss_raw * mask).sum() / (mask.sum() + 1e-8)
-            
-            loss.backward()
-            optimizer.step()
-            train_loss += loss.item()
-
-        # 3. Validação (Test Set)
-        model.eval()
-        val_mae = 0
-        with torch.no_grad():
-            for xv, yv in test_loader:
-                xv, yv = xv.to(device), yv.to(device)
+            for x, y in train_loader:
+                x, y = x.to(device), y.to(device)
+                optimizer.zero_grad()
                 
-                bv, sv, nv, fv = xv.shape
-                xv_lstm = xv.permute(0, 2, 1, 3).reshape(-1, sv, fv)
-                target_v_lstm = yv.permute(0, 2, 1).reshape(-1, 12)
-
-                pred = model(xv_lstm)
-                if pred.dim() == 1: pred = pred.view(target_v_lstm.shape[0], -1)
+                output = model(x)
                 
-                mask_v = (target_v_lstm > 0).float()
-                v_mae = (mae_criterion(pred, target_v_lstm) * mask_v).sum() / (mask_v.sum() + 1e-8)
-                val_mae += v_mae.item()
+                # Máscara adaptada ao limiar normalizado
+                mask = (y > zero_threshold).float()
+                loss = (mae_criterion(output, y) * mask).sum() / (mask.sum() + 1e-8)
+                
+                loss.backward()
+                optimizer.step()
+                train_loss += loss.item()
 
-        avg_train_mae = train_loss / len(train_loader)
-        avg_val_mae = val_mae / len(test_loader)
-        scheduler.step(avg_val_mae)
-        
-        if avg_val_mae < best_val_mae:
-            best_val_mae = avg_val_mae
-            torch.save(model.state_dict(), os.path.join(model_dir, 'lstm_model.pth'))
-            status = "⭐ Melhor Modelo!"
-        else:
-            status = ""
+            # Validação
+            model.eval()
+            val_mae = 0.0
+            with torch.no_grad():
+                for xv, yv in test_loader:
+                    xv, yv = xv.to(device), yv.to(device)
+                    pred = model(xv)
+                    
+                    mask_v = (yv > zero_threshold).float()
+                    v_mae = (mae_criterion(pred, yv) * mask_v).sum() / (mask_v.sum() + 1e-8)
+                    val_mae += v_mae.item()
 
-        log_print(f"Ep [{epoch+1:02d}/{epochs}] | Train: {avg_train_mae:.4f} | Val: {avg_val_mae:.4f} | LR: {optimizer.param_groups[0]['lr']:.6f} {status}")
-        history.append({"epoch": epoch+1, "train_mae": avg_train_mae, "val_mae": avg_val_mae})
+            avg_train_mae = train_loss / len(train_loader)
+            avg_val_mae = val_mae / len(test_loader)
+            scheduler.step(avg_val_mae)
+            
+            history.append({"epoch": epoch+1, "train_mae": avg_train_mae, "val_mae": avg_val_mae})
+            
+            # Salva Pesos Limpos para Inferência (Recorde)
+            if avg_val_mae < best_val_mae:
+                best_val_mae = avg_val_mae
+                torch.save(model.state_dict(), caminho_pesos_salvar)
+                status = "Melhor Modelo!"
+            else:
+                status = ""
+
+            # Salva o Estado Completo para Resiliência Sistêmica (Sempre)
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
+                'best_val_mae': best_val_mae,
+                'history': history
+            }, caminho_checkpoint)
+
+            current_lr = optimizer.param_groups[0]['lr']
+            log_print(f"Ep [{epoch+1:02d}/{epochs}] | Train MAE: {avg_train_mae:.4f} | Val MAE: {avg_val_mae:.4f} | LR: {current_lr:.6f} {status}")
+
+    except KeyboardInterrupt:
+        log_print("\n\n⚠️ Treinamento INTERROMPIDO manualmente pelo usuário (Ctrl+C).")
+        log_print("O progresso da última época concluída foi salvo integralmente no checkpoint.")
 
     total_time = str(datetime.timedelta(seconds=int(time.time() - start_train)))
-    log_print(f"\n🏆 Treino LSTM Finalizado em {total_time}")
     
-    # Salvamento para análise comparativa
+    log_print("\n" + "="*50)
+    log_print(f"Treino LSTM Finalizado em {total_time}")
+    log_print(f"Melhor MAE normalizado no Teste (Horizonte 12): {best_val_mae:.4f}")
+    log_print("="*50)
+
     history_path = os.path.join(log_dir, f"history_lstm_{timestamp}.csv")
     pd.DataFrame(history).to_csv(history_path, index=False)
+    log_print(f"Histórico salvo em: {history_path}")
 
 if __name__ == "__main__":
     treinar_lstm()

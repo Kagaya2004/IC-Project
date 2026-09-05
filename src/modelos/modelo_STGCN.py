@@ -8,6 +8,7 @@ class TemporalConv(nn.Module):
         self.conv = nn.Conv2d(in_channels, out_channels * 2, (kernel_size, 1), padding=(1, 0))
 
     def forward(self, x):
+        # x: [Batch, Channels, Time, Nodes]
         x_conv = self.conv(x)
         p, q = torch.split(x_conv, x_conv.shape[1] // 2, dim=1)
         return p * torch.sigmoid(q)
@@ -19,11 +20,15 @@ class SpatialConv(nn.Module):
         self.adj = None
 
     def forward(self, x, edge_index, edge_weight):
+        # x: [Batch, Channels, Time, Nodes]
         batch, c, t, n = x.shape
-        if self.adj is None or self.adj.shape[0] != n:
-            self.adj = torch.zeros((n, n), device=x.device)
-            self.adj[edge_index[0], edge_index[1]] = edge_weight
+        
+        if self.adj is None or self.adj.shape[0] != n or self.adj.device != x.device:
+            adj = torch.zeros((n, n), device=x.device, dtype=x.dtype)
+            adj[edge_index[0], edge_index[1]] = edge_weight.to(x.dtype)
+            self.adj = adj
 
+        # Reorganiza para convolução espacial matricial: [Batch * Time, Nodes, Channels]
         x_flat = x.permute(0, 2, 3, 1).reshape(-1, n, c)
         out = torch.matmul(self.adj, x_flat)
         out = self.theta(out)
@@ -43,7 +48,7 @@ class STConvBlock(nn.Module):
         x = self.tmp_conv1(x)
         x = self.spa_conv(x, edge_index, edge_weight)
         x = self.tmp_conv2(x)
-        x = F.relu(x + res[:, :, :x.shape[2], :]) 
+        x = F.relu(x + res[:, :, :x.shape[2], :])
         batch, c, t, n = x.shape
         return self.ln(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
 
@@ -60,11 +65,16 @@ class STGCN_TrafficModel(nn.Module):
         )
 
     def forward(self, x, edge_index, edge_weight):
-        x = x.permute(0, 3, 1, 2) 
+        # x entrada: [Batch, Time (12), Nodes (207), Features (5)]
+        # Converte para o padrão convolucional: [Batch, Features, Time, Nodes]
+        x = x.permute(0, 3, 1, 2).contiguous()
         x = self.input_conv(x)
         x = self.block1(x, edge_index, edge_weight)
         x = self.block2(x, edge_index, edge_weight)
+        
         batch, c, t, n = x.shape
         x = x.permute(0, 3, 1, 2).reshape(batch, n, -1)
-        out = self.fully_connected(x) 
-        return out.permute(0, 2, 1) # [Batch, 12, 207]
+        out = self.fully_connected(x)
+        
+        # Retorna: [Batch, Horizon (12), Nodes (207)]
+        return out.permute(0, 2, 1).contiguous()
